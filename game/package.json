@@ -1,0 +1,23 @@
+{
+  "name": "hafengold",
+  "version": "0.1.0",
+  "private": true,
+  "description": "HAFENGOLD - a top-down 2.5D crime action game set in a fictional modern German city",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "build:dev": "node build.mjs --dev",
+    "typecheck": "tsc --noEmit -p .",
+    "serve": "node build.mjs --serve",
+    "test": "node tests/run.mjs"
+  },
+  "dependencies": {
+    "planck": "^1.5.1",
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@types/three": "^0.186.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^6.0.3"
+  }
+}
