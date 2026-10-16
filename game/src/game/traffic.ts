@@ -21,6 +21,8 @@ export interface Driver {
   /** last recovery attempt */
   lostT: number;
   despawn: boolean;
+  /** seconds of panic driving left (shot at, crashed into by the player) */
+  panicT: number;
 }
 
 const tmp = { x: 0, y: 0, h: 0 };
@@ -127,6 +129,7 @@ export class TrafficSystem {
       aggressive: this.rng.chance(0.15),
       lostT: 0,
       despawn: false,
+      panicT: 0,
     };
     v.ai = d;
     this.drivers.push(d);
@@ -167,6 +170,14 @@ export class TrafficSystem {
       this.parkedSpawned.set(i, v);
       if (this.parkedSpawned.size > 40) break;
     }
+  }
+
+  /** The driver of v panics: floors it and ignores lights for a while. */
+  panic(v: Vehicle): void {
+    const d = this.drivers.find((o) => o.v === v);
+    if (!d) return;
+    d.panicT = 10;
+    d.honkT = 1.2;
   }
 
   forgetParked(v: Vehicle): void {
@@ -277,7 +288,9 @@ export class TrafficSystem {
     v.steerIn = clamp(delta / Math.max(0.05, v.maxSteerAt(speed)), -1, 1);
 
     // --- target speed ---
-    let target = e.speed * d.cruise;
+    if (d.panicT > 0) d.panicT -= dt;
+    const panic = d.panicT > 0;
+    let target = e.speed * d.cruise * (panic ? 1.6 : 1);
     // anticipate turns and stops along the path
     let distAhead = e.len - d.s;
     for (let i = 0; i < d.path.length && distAhead < 45; i++) {
@@ -303,7 +316,7 @@ export class TrafficSystem {
         if (stopDist < 3 && this.crossTrafficNear(edge)) target = 0;
       }
     };
-    if (e.road >= 0) stopCheck(e, e.len - d.s);
+    if (e.road >= 0 && !panic) stopCheck(e, e.len - d.s);
     else if (d.path.length) {
       // currently inside a junction: nothing to stop for
     }
@@ -365,7 +378,7 @@ export class TrafficSystem {
       v.throttle = err > 0 ? clamp01(err * 0.45 + 0.1) : 0;
       v.brake = err < -0.6 ? clamp01(-err * 0.35) : 0;
     }
-    if (d.aggressive && v.throttle > 0) v.throttle = Math.min(1, v.throttle * 1.3);
+    if ((d.aggressive || panic) && v.throttle > 0) v.throttle = Math.min(1, v.throttle * 1.3);
     v.lightsOn = true;
     // horn
     d.honkT -= dt;

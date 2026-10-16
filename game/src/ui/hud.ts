@@ -78,6 +78,11 @@ export class HUD {
   private elFps: HTMLElement;
   readonly btnPause: HTMLElement;
   readonly btnRadio: HTMLElement;
+  readonly btnWeapon: HTMLElement;
+  private elHurt: HTMLElement;
+  private hurtA = 0;
+  private elPText: HTMLElement;
+  private ptextT = 0;
   private last = { money: -1, wanted: -1, hp: -1, armor: -1, speed: -1, weapon: '' };
   private bannerT = 0;
   private vbannerT = 0;
@@ -101,10 +106,12 @@ export class HUD {
       <div class="topbtns"><div class="ubtn radio" style="display:none">♫</div><div class="ubtn pause">II</div></div>
       <div class="banner"></div>
       <div class="vbanner"></div>
+      <div class="ptext"></div>
       <div class="speedo" style="display:none"></div>
       <div class="center-msg"></div>
       <div class="hint"></div>
-      <div class="fps"></div>`;
+      <div class="fps"></div>
+      <div class="hurt"></div>`;
     this.radar = this.root.querySelector('canvas.radar') as HTMLCanvasElement;
     const dpr = Math.min(2, window.devicePixelRatio || 1);
     this.radar.width = this.radar.height = Math.round(160 * dpr);
@@ -123,6 +130,24 @@ export class HUD {
     this.elFps = this.root.querySelector('.fps') as HTMLElement;
     this.btnPause = this.root.querySelector('.pause') as HTMLElement;
     this.btnRadio = this.root.querySelector('.radio') as HTMLElement;
+    this.btnWeapon = this.elWeapon;
+    this.elHurt = this.root.querySelector('.hurt') as HTMLElement;
+    this.elPText = this.root.querySelector('.ptext') as HTMLElement;
+  }
+
+  /** GTA 2 style red pickup text */
+  pickupText(text: string, color = '#ff4a3a'): void {
+    this.elPText.textContent = text;
+    this.elPText.style.color = color;
+    this.elPText.classList.remove('show');
+    void this.elPText.offsetWidth;
+    this.elPText.classList.add('show');
+    this.ptextT = 1.6;
+  }
+
+  /** red screen-edge flash when the player takes damage (0..1) */
+  hurt(a: number): void {
+    this.hurtA = Math.min(1, Math.max(this.hurtA, a * 0.8 + 0.2));
   }
 
   district(name: string): void {
@@ -179,6 +204,11 @@ export class HUD {
     if (this.vbannerT > 0 && (this.vbannerT -= dt) <= 0) this.elVBanner.classList.remove('show');
     if (this.centerT > 0 && (this.centerT -= dt) <= 0) this.elCenter.classList.remove('show');
     if (this.hintT > 0 && (this.hintT -= dt) <= 0) this.elHint.classList.remove('show');
+    if (this.ptextT > 0 && (this.ptextT -= dt) <= 0) this.elPText.classList.remove('show');
+    if (this.hurtA > 0) {
+      this.hurtA = Math.max(0, this.hurtA - dt * 1.6);
+      this.elHurt.style.opacity = this.hurtA.toFixed(3);
+    }
     const L = this.last;
     const money = Math.round(s.money);
     if (money !== L.money) {

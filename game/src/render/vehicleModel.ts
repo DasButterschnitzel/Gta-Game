@@ -349,6 +349,11 @@ export function vehicleGeometry(def: VehicleDef): THREE.BufferGeometry {
     if (m.lightbar === 'yellow') {
       box(b, lx, -lw / 3, roofTop, 0.3, 0.32, 0.18, 0xd89a10, 0, E_AMBER);
       box(b, lx, lw / 3, roofTop, 0.3, 0.32, 0.18, 0xd89a10, 0, E_AMBER);
+    } else if (m.lightbar === 'magnet') {
+      // unmarked car: one magnetic blue beacon on the driver's side + flashers behind the grille
+      box(b, lx, hw - 0.45, roofTop, 0.26, 0.26, 0.16, 0x1a3aa8, 0, E_BLUE_A);
+      box(b, at(1) - 0.04, -0.35, m.beltZ - 0.25, 0.06, 0.18, 0.08, 0x1a3aa8, 0, E_BLUE_B);
+      box(b, at(1) - 0.04, 0.35, m.beltZ - 0.25, 0.06, 0.18, 0.08, 0x1a3aa8, 0, E_BLUE_A);
     } else {
       box(b, lx, 0, roofTop, 0.32, lw * 0.36, 0.12, 0xe8e8e8, 0, E_WHITE);
       box(b, lx, -lw * 0.34, roofTop, 0.34, lw * 0.32, 0.16, 0x1a3aa8, 0, E_BLUE_A);
@@ -427,6 +432,16 @@ export function vehicleLivery(def: VehicleDef): THREE.Texture | null {
     }
     case 'taxi': {
       text('TAXI 2 22 22', fx(0.5), side.y + 30, 16, '#1a1a1a');
+      break;
+    }
+    case 'bse': {
+      // federal special unit: matt olive, armour plates, yellow unit code
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      for (let x = 8; x < W; x += 36) ctx.fillRect(x, 6, 2, 52);
+      text('BSE-9', fx(0.45), 32, 24, '#d8c01a', -Math.PI / 2);
+      ctx.fillStyle = '#d8c01a';
+      ctx.fillRect(0, side.y + 46, W, 4);
+      text('BUNDESSICHERHEIT', fx(0.5), side.y + 30, 13, '#d8d8c8');
       break;
     }
     case 'ambulance': {

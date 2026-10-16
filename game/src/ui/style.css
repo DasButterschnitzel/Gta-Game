@@ -433,3 +433,33 @@ body {
   font-size: 13px;
   opacity: 0.6;
 }
+
+.hud .bars .weapon {
+  pointer-events: auto;
+  cursor: pointer;
+}
+.hud .hurt {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, rgba(160, 0, 0, 0) 55%, rgba(170, 0, 0, 0.55) 100%);
+}
+.hud .ptext {
+  position: absolute;
+  top: 58%;
+  left: 50%;
+  transform: translate(-50%, 0) scale(0.7);
+  opacity: 0;
+  font-weight: 900;
+  font-style: italic;
+  font-size: 24px;
+  letter-spacing: 0.06em;
+  text-shadow: 0 2px 0 #000, 0 0 10px rgba(0, 0, 0, 0.7);
+  transition: opacity 0.2s, transform 0.2s;
+  white-space: nowrap;
+}
+.hud .ptext.show {
+  opacity: 1;
+  transform: translate(-50%, 0) scale(1);
+}

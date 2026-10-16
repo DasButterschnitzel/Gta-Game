@@ -377,12 +377,133 @@ function groundQuadMaterial(tex: THREE.Texture | null, color: THREE.Color): THRE
   });
 }
 
+/** Short-lived additive line quads for bullet tracers. */
+class TracerPool {
+  readonly mesh: THREE.Mesh;
+  private geo: THREE.BufferGeometry;
+  private pos: Float32Array;
+  private col: Float32Array;
+  private seg: Float32Array; // x0 y0 x1 y1 life maxLife width bright
+  private n = 0;
+
+  constructor(private max: number) {
+    this.geo = new THREE.BufferGeometry();
+    this.pos = new Float32Array(max * 4 * 3);
+    this.col = new Float32Array(max * 4 * 4);
+    this.seg = new Float32Array(max * 8);
+    const idx = new Uint16Array(max * 6);
+    for (let i = 0; i < max; i++) idx.set([i * 4, i * 4 + 1, i * 4 + 2, i * 4, i * 4 + 2, i * 4 + 3], i * 6);
+    this.geo.setIndex(new THREE.BufferAttribute(idx, 1));
+    this.geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage));
+    this.geo.setAttribute('aCol', new THREE.BufferAttribute(this.col, 4).setUsage(THREE.DynamicDrawUsage));
+    this.geo.setDrawRange(0, 0);
+    const mat = new THREE.ShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      vertexShader: /* glsl */ `
+        in vec4 aCol;
+        out vec4 vCol;
+        void main() {
+          vCol = aCol;
+          gl_Position = projectionMatrix * viewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: /* glsl */ `
+        precision highp float;
+        in vec4 vCol;
+        out vec4 fragColor;
+        void main() { fragColor = vec4(vCol.rgb * vCol.a, vCol.a); }`,
+    });
+    this.mesh = new THREE.Mesh(this.geo, mat);
+    this.mesh.frustumCulled = false;
+    this.mesh.renderOrder = 10;
+  }
+
+  add(x0: number, y0: number, x1: number, y1: number, bright: number): void {
+    let i = this.n;
+    if (i >= this.max) i = Math.floor(Math.random() * this.max);
+    else this.n++;
+    const o = i * 8;
+    this.seg[o] = x0;
+    this.seg[o + 1] = y0;
+    this.seg[o + 2] = x1;
+    this.seg[o + 3] = y1;
+    this.seg[o + 4] = 0.075;
+    this.seg[o + 5] = 0.075;
+    this.seg[o + 6] = 0.06 + bright * 0.03;
+    this.seg[o + 7] = bright;
+  }
+
+  update(dt: number): void {
+    const S = this.seg;
+    let n = this.n;
+    for (let i = 0; i < n; i++) {
+      S[i * 8 + 4] -= dt;
+      if (S[i * 8 + 4] <= 0) {
+        n--;
+        S.copyWithin(i * 8, n * 8, n * 8 + 8);
+        i--;
+      }
+    }
+    this.n = n;
+    const P = this.pos;
+    const C = this.col;
+    for (let i = 0; i < n; i++) {
+      const o = i * 8;
+      const x0 = S[o];
+      const y0 = S[o + 1];
+      const x1 = S[o + 2];
+      const y1 = S[o + 3];
+      const t = S[o + 4] / S[o + 5];
+      const w = S[o + 6];
+      const dx = x1 - x0;
+      const dy = y1 - y0;
+      const L = Math.hypot(dx, dy) || 1;
+      // the visible streak travels towards the hit point while fading
+      const head = 1 - t * 0.6;
+      const tail = Math.max(0, head - Math.min(1, 9 / L));
+      const ax = x0 + dx * tail;
+      const ay = y0 + dy * tail;
+      const bx = x0 + dx * head;
+      const by = y0 + dy * head;
+      const nx = (-dy / L) * w;
+      const ny = (dx / L) * w;
+      const p = i * 12;
+      P[p] = ax - nx;
+      P[p + 1] = ay - ny;
+      P[p + 2] = 1.0;
+      P[p + 3] = bx - nx;
+      P[p + 4] = by - ny;
+      P[p + 5] = 0.95;
+      P[p + 6] = bx + nx;
+      P[p + 7] = by + ny;
+      P[p + 8] = 0.95;
+      P[p + 9] = ax + nx;
+      P[p + 10] = ay + ny;
+      P[p + 11] = 1.0;
+      const a = Math.min(1, t * 1.6) * (0.55 + 0.45 * S[o + 7]);
+      const c = i * 16;
+      for (let k = 0; k < 4; k++) {
+        C[c + k * 4] = 1.0;
+        C[c + k * 4 + 1] = 0.86;
+        C[c + k * 4 + 2] = 0.5;
+        C[c + k * 4 + 3] = k === 0 || k === 3 ? a * 0.25 : a;
+      }
+    }
+    this.geo.setDrawRange(0, n * 6);
+    (this.geo.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
+    (this.geo.getAttribute('aCol') as THREE.BufferAttribute).needsUpdate = true;
+  }
+}
+
 export class Effects {
   readonly root = new THREE.Group();
   private soft: ParticlePool;
   private glow: ParticlePool;
   private skids: GroundQuads;
   private decals: GroundQuads;
+  private tracers: TracerPool;
   private lastWheel = new Map<string, { x: number; y: number; t: number }>();
   time = 0;
   /** quality: 0 low .. 1 high (scales emission) */
@@ -393,13 +514,15 @@ export class Effects {
     this.glow = new ParticlePool(500, dotTexture(), true, false);
     this.skids = new GroundQuads(2400, groundQuadMaterial(null, new THREE.Color(0.06, 0.06, 0.07)), 0.035);
     this.decals = new GroundQuads(160, groundQuadMaterial(decalTexture(), new THREE.Color(1, 1, 1)), 0.03);
-    this.root.add(this.skids.mesh, this.decals.mesh, this.soft.mesh, this.glow.mesh);
+    this.tracers = new TracerPool(96);
+    this.root.add(this.skids.mesh, this.decals.mesh, this.soft.mesh, this.glow.mesh, this.tracers.mesh);
   }
 
   update(dt: number): void {
     this.time += dt;
     this.soft.update(dt);
     this.glow.update(dt);
+    this.tracers.update(dt);
   }
 
   private q(n: number): number {
@@ -480,7 +603,46 @@ export class Effects {
   }
 
   muzzle(x: number, y: number, a: number): void {
-    this.glow.emit(x + Math.cos(a) * 0.4, y + Math.sin(a) * 0.4, 1.0, 0, 0, 0, 0.9, 2, 0.06, 0xfff0a0, 1, 0);
+    const c = Math.cos(a);
+    const s = Math.sin(a);
+    this.glow.emit(x + c * 0.25, y + s * 0.25, 1.0, 0, 0, 0, 0.9, 2, 0.05, 0xfff0a0, 1, 0);
+    this.glow.emit(x + c * 0.55, y + s * 0.55, 1.0, 0, 0, 0, 0.55, 1.5, 0.04, 0xffc860, 0.9, 0);
+    // a faint gun-smoke puff
+    this.soft.emit(x + c * 0.4, y + s * 0.4, 1.0, c * 0.8, s * 0.8, 0.3, 0.35, 0.9, 0.5, 0xb8b8b8, 0.22, 2);
+  }
+
+  tracer(x0: number, y0: number, x1: number, y1: number, bright = 1): void {
+    this.tracers.add(x0, y0, x1, y1, bright);
+  }
+
+  /** One-frame sprite for a thrown object (molotov / grenade). */
+  projectile(x: number, y: number, z: number, kind: 'molotov' | 'grenade'): void {
+    const s = 0.32 + z * 0.05;
+    if (kind === 'molotov') {
+      this.soft.emit(x, y, z + 0.1, 0, 0, 0, s, 0, 0.02, 0x2e5a2a, 1, 0);
+      this.glow.emit(x, y, z + 0.2, 0, 0, 0, 0.35, 0, 0.02, 0xffa030, 0.9, 0);
+      if (Math.random() < 0.5) this.soft.emit(x, y, z, 0, 0, 0.5, 0.2, 0.6, 0.35, 0x444444, 0.25, 1);
+    } else {
+      this.soft.emit(x, y, z + 0.1, 0, 0, 0, s * 0.85, 0, 0.02, 0x3a4a2a, 1, 0);
+    }
+  }
+
+  /** Flash of flames when a molotov bursts. */
+  fireBurst(x: number, y: number): void {
+    this.glow.emit(x, y, 1.5, 0, 0, 0, 5, 12, 0.18, 0xffb040, 0.9, 0);
+    for (let i = 0; i < this.q(18); i++) {
+      const a = rng.range(0, Math.PI * 2);
+      const sp = rng.range(2, 6);
+      this.glow.emit(x, y, 0.8, Math.cos(a) * sp, Math.sin(a) * sp, rng.range(1, 3), rng.range(0.8, 1.6), 1.5, rng.range(0.3, 0.6), rng.pick([0xff9a20, 0xffc040, 0xff6010]), 0.9, 4);
+    }
+  }
+
+  /** Dark burn mark on the ground. */
+  scorch(x: number, y: number, size: number): void {
+    const a = rng.range(0, Math.PI * 2);
+    const c = Math.cos(a) * size;
+    const s = Math.sin(a) * size;
+    this.decals.add(x - c + s, y - s - c, x + c + s, y + s - c, x + c - s, y + s + c, x - c - s, y - s + c, [0.5, 0, 1, 0.5], 0.8);
   }
 
   /** draw a skid-mark segment for a wheel; key identifies vehicle+wheel */

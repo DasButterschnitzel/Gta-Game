@@ -17,7 +17,7 @@ export interface ModelSpec {
   roofInset: number; // how much narrower the roof is on each side (m)
   chamfer: number; // footprint corner chamfer (m)
   hoodDrop: number; // front edge lowered by (m)
-  lightbar?: 'police' | 'ambulance' | 'fire' | 'yellow';
+  lightbar?: 'police' | 'ambulance' | 'fire' | 'yellow' | 'magnet';
   taxiSign?: boolean;
   ladder?: boolean;
   spoiler?: boolean;
@@ -27,7 +27,7 @@ export interface ModelSpec {
   trim?: number;
   wheelR?: number;
   /** emergency vehicles: livery drawing key */
-  livery?: 'police' | 'taxi' | 'ambulance' | 'fire' | 'parcel' | 'sek' | 'gti' | 'bus' | 'garbage' | 'race';
+  livery?: 'police' | 'taxi' | 'ambulance' | 'fire' | 'parcel' | 'sek' | 'gti' | 'bus' | 'garbage' | 'race' | 'bse';
 }
 
 export interface VehicleDef {
@@ -54,6 +54,8 @@ export interface VehicleDef {
   traffic: number;
   emergency?: 'police' | 'ambulance' | 'fire' | 'sek';
   heavy?: boolean;
+  /** extra armour: incoming damage is multiplied by this */
+  armor?: number;
   /** price on the export list / value */
   value: number;
 }
@@ -419,6 +421,56 @@ export const VEHICLES: Record<string, VehicleDef> = {
     heavy: true,
     emergency: 'sek',
     model: { body: 'van', cabRear: 0.0, cabFront: 0.8, roofRear: 0.0, roofFront: 0.74, beltZ: 1.0, roofZ: 2.6, roofInset: 0.06, chamfer: 0.24, hoodDrop: 0.18, lightbar: 'police', livery: 'sek' },
+  },
+  zivil: {
+    id: 'zivil',
+    name: 'Zivilstreife',
+    length: 4.94,
+    width: 1.87,
+    height: 1.47,
+    wheelbase: 2.97,
+    mass: 1700,
+    power: 240e3,
+    topSpeed: 72,
+    accelCap: 7.6,
+    grip: 1.2,
+    drive: 'AWD',
+    brake: 12,
+    steerMax: 0.58,
+    engine: 'i6',
+    health: 150,
+    colors: [0x1a1c20, 0x3a3e44, 0x22262c],
+    traffic: 0,
+    value: 16000,
+    siren: true,
+    emergency: 'police',
+    model: { body: 'sedan', cabRear: 0.2, cabFront: 0.66, roofRear: 0.27, roofFront: 0.54, beltZ: 0.92, roofZ: 1.47, roofInset: 0.14, chamfer: 0.3, hoodDrop: 0.12, lightbar: 'magnet' },
+  },
+  bse: {
+    id: 'bse',
+    name: 'BSE-9 Sonderwagen',
+    length: 6.2,
+    width: 2.25,
+    height: 2.7,
+    wheelbase: 3.7,
+    mass: 5200,
+    power: 260e3,
+    topSpeed: 44,
+    accelCap: 4.2,
+    grip: 1.05,
+    drive: 'AWD',
+    brake: 9,
+    steerMax: 0.55,
+    engine: 'truck',
+    health: 420,
+    armor: 0.6,
+    colors: [0x2e332c],
+    traffic: 0,
+    value: 30000,
+    siren: true,
+    heavy: true,
+    emergency: 'sek',
+    model: { body: 'van', cabRear: 0.0, cabFront: 0.82, roofRear: 0.0, roofFront: 0.76, beltZ: 1.1, roofZ: 2.7, roofInset: 0.08, chamfer: 0.38, hoodDrop: 0.22, lightbar: 'police', livery: 'bse', glass: 0x1a2026 },
   },
   rtw: {
     id: 'rtw',

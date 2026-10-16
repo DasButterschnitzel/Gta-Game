@@ -943,7 +943,7 @@ export function generateTreeLayers(seed = 5): Uint8Array {
     [0x2f5a24, 0x4a7a32, 0x6a9a44, 0x86b456],
     [0x2a5226, 0x3e6e30, 0x5a8c3c, 0x7aa850],
     [0x34502a, 0x4e6e36, 0x6e8c46, 0x94ac5c],
-    [0x5a3a1a, 0xa0581e, 0xd08a2a, 0xe8b440],
+    [0x341c20, 0x52282c, 0x6e3836, 0x8a4c44], // copper beech (Blutbuche)
   ];
   for (let v = 0; v < TREE_VARIANTS; v++) {
     const rng = new RNG(seed * 71 + v);

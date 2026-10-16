@@ -5,14 +5,14 @@ import { CityRenderer } from '../render/cityRenderer';
 import { CharacterRenderer, type CharDraw } from '../render/charSprites';
 import { BlobShadows } from '../render/shadows';
 import { VehicleView } from '../render/vehicleView';
-import { GU } from '../render/globals';
+import { GU, SHADOW_DIR } from '../render/globals';
 import { generateCity } from '../world/citygen';
 import type { City } from '../world/city';
 import { DISTRICT_NAMES, TILE, Zone } from '../world/types';
 import { Physics, type Impact } from '../physics/physics';
 import { Vehicle } from './vehicle';
 import { VEHICLES } from './vehicleDefs';
-import { Character, LOOKS, type Role } from './character';
+import { Character, LOOKS, randomLook, type Role } from './character';
 import type { CharLook } from '../render/charSprites';
 import { PlayerController, type PlayerHost } from './player';
 import { Input, emptyInput, type InputState } from './input';
@@ -27,6 +27,13 @@ import { AudioEngine } from '../audio/audio';
 import { GameAudio } from '../audio/gameAudio';
 import { Effects } from '../render/effects';
 import { RNG } from '../core/rng';
+import { CombatSystem } from './combat';
+import { Arsenal, WEAPONS, type WeaponId } from './weapons';
+import { PickupSystem, type Pickup } from './pickups';
+import { PickupRenderer } from '../render/pickupRenderer';
+import { PoliceSystem } from './police';
+import { WantedSystem, type Crime } from './wanted';
+import { PoliceView } from '../render/policeView';
 
 const nextFrame = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 const STEP = 1 / 60;
@@ -60,7 +67,16 @@ export class Game implements WorldAPI, PlayerHost {
   clock = 7.5;
   clockSpeed = 1 / 60; // game hours per real second (1 min per second)
   money = 250;
-  wanted = 0;
+  wanted = new WantedSystem();
+  police!: PoliceSystem;
+  private policeView!: PoliceView;
+  /** simulation speed (slow motion on takedowns) */
+  private timeScale = 1;
+  private slowT = 0;
+  private bustedT = 0;
+  private bustFine = 0;
+  private sprayT = 0;
+  private paintHintT = 0;
   paused = false;
   private deadT = 0;
   private flashT = 0;
@@ -69,6 +85,9 @@ export class Game implements WorldAPI, PlayerHost {
   audio = new AudioEngine();
   sound!: GameAudio;
   fx!: Effects;
+  combat!: CombatSystem;
+  pickups!: PickupSystem;
+  private pickupRenderer!: PickupRenderer;
   private audioUnlocked = false;
 
   constructor(
@@ -114,8 +133,22 @@ export class Game implements WorldAPI, PlayerHost {
     });
     this.traffic = new TrafficSystem(this);
     this.peds = new PedSystem(this);
+    this.police = new PoliceSystem(this);
+    this.policeView = new PoliceView();
+    this.renderer.scene.add(this.policeView.root);
+    this.wanted.onLevel = (lvl, prev) => {
+      if (lvl > prev) this.sound?.play('static', undefined, undefined, 0.35);
+    };
     this.fx = new Effects();
     this.renderer.scene.add(this.fx.root);
+    this.combat = new CombatSystem(this);
+    this.pickups = new PickupSystem(this.city);
+    this.pickupRenderer = new PickupRenderer();
+    this.renderer.scene.add(this.pickupRenderer.root);
+    this.hud.btnWeapon.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      this.input.press('weaponNext');
+    });
     progress(0.78, 'Lade Sounds …');
     await nextFrame();
     try {
@@ -143,6 +176,7 @@ export class Game implements WorldAPI, PlayerHost {
     const start = this.city.pois.get('start')!;
     const c = this.spawnChar(start.x, start.y, LOOKS.kai, 'player');
     c.heading = Math.PI;
+    c.arsenal = new Arsenal();
     this.player = new PlayerController(c, this);
     // Dende's Golfo "Gisela" waits in front of the prison
     this.gisela = this.spawnVehicle('gisela', start.x - 5.5, start.y - 2.5, Math.PI / 2, VEHICLES.gisela.colors[0]);
@@ -180,7 +214,12 @@ export class Game implements WorldAPI, PlayerHost {
       p.pausePressed = false;
       this.togglePause();
     }
+    if (this.slowT > 0) {
+      this.slowT -= dt;
+      if (this.slowT <= 0) this.timeScale = 1;
+    }
     if (!this.paused) {
+      dt *= this.timeScale;
       this.acc += dt;
       let steps = 0;
       while (this.acc >= STEP && steps < 5) {
@@ -213,8 +252,9 @@ export class Game implements WorldAPI, PlayerHost {
 
   private fixedStep(dt: number, inp: InputState): void {
     this.time += dt;
-    this.player.update(dt, inp);
+    this.player.update(dt, this.bustedT > 0 ? emptyInput() : inp);
     this.traffic.step(dt);
+    this.police.step(dt);
     this.peds.step(dt);
     for (const v of this.vehicles) {
       v.savePrev();
@@ -222,6 +262,9 @@ export class Game implements WorldAPI, PlayerHost {
       v.step(dt);
     }
     for (const c of this.chars) c.step(dt);
+    this.combat.step(dt);
+    this.pickups.step(dt);
+    this.checkPickups();
     this.physics.step(dt);
     this.handleImpacts(this.physics.impacts);
     this.updateHazards(dt);
@@ -235,6 +278,13 @@ export class Game implements WorldAPI, PlayerHost {
     const py = pl.y;
     this.traffic.manage(dt, px, py);
     this.peds.manage(dt, px, py);
+    this.police.manage(dt);
+    this.wanted.step(dt, this.police.seen, px, py);
+    this.checkPaintShops(dt);
+    if (this.bustedT > 0) {
+      this.bustedT += dt;
+      if (this.bustedT > 3.4) this.afterBust();
+    }
     // camera follow
     let vx = 0;
     let vy = 0;
@@ -246,6 +296,7 @@ export class Game implements WorldAPI, PlayerHost {
     const { hw, hh } = this.renderer.halfExtents(this.camera.h);
     this.camera.update(dt, px, py, vx, vy, pl.inVehicle, hw, hh);
     this.vehicleEffects(dt);
+    this.combat.frame(dt);
     this.fx.update(dt);
     if (this.flashT > 0) this.flashT -= dt;
     GU.uFlash.value = Math.max(0, this.flashT / 0.35) * 0.9;
@@ -266,17 +317,25 @@ export class Game implements WorldAPI, PlayerHost {
       this.deadT += dt;
       if (this.deadT > 3.5) this.respawn();
     }
+    for (const c of this.chars) if (c.arsenal) c.weaponPose = c.arsenal.def.pose;
     this.touch.setModeIfChanged(pl.inVehicle ? 'car' : 'foot');
     const blips: Blip[] = [];
+    this.police.blips(blips, this.time);
+    if (this.wanted.level > 0) {
+      for (const id of ['paint1', 'paint2']) {
+        const p = this.city.pois.get(id);
+        if (p) blips.push({ x: p.x, y: p.y, color: '#7ce07c', size: 5, shape: 'square' });
+      }
+    }
     if (this.gisela && !this.gisela.dead && pl.vehicle !== this.gisela) blips.push({ x: this.gisela.x, y: this.gisela.y, color: '#ff4040', size: 5, shape: 'square' });
     const veh = pl.vehicle;
     this.hud.update(dt, {
       money: this.money,
-      wanted: this.wanted,
-      wantedFlash: false,
+      wanted: this.wanted.level,
+      wantedFlash: this.wanted.searching && this.wanted.level > 0,
       hp: pl.char.health,
       armor: pl.char.armor,
-      weapon: 'Fäuste',
+      weapon: pl.char.arsenal?.label() ?? 'Fäuste',
       speedKmh: veh ? Math.abs(veh.forwardSpeed) * 3.6 : null,
       px,
       py,
@@ -365,6 +424,8 @@ export class Game implements WorldAPI, PlayerHost {
         if (dv > 2.2) {
           let dmg = (dv - 2.2) * 5.5;
           if (other && other.def.heavy && !v.def.heavy) dmg *= 1.3;
+          // police drivers survive their own scrapes with walls better (takedowns need ramming)
+          if (other !== this.player.vehicle && v.ai && v !== this.player.vehicle && this.police.isPoliceVehicle(v)) dmg *= 0.45;
           v.damage(dmg, other?.driver ?? null);
           if (v.sinceCrash > 0.25) {
             this.sound.crash(it.x, it.y, dv, v.def.heavy === true || (other?.def.heavy ?? false));
@@ -377,6 +438,11 @@ export class Game implements WorldAPI, PlayerHost {
             this.vibrate(Math.min(80, 10 + dv * 6));
           }
           if (dv > 5) this.alarm(it.x, it.y, 16, 0.5);
+          // ramming a police car that isn't chasing you is a crime
+          if (other && other === this.player.vehicle) {
+            const u = this.police.isPoliceVehicle(v);
+            if (u && (this.wanted.level === 0 || u.mode === 'patrol')) this.crime('ram_cop', it.x, it.y);
+          }
         }
       }
       // vehicle vs pedestrian
@@ -401,7 +467,12 @@ export class Game implements WorldAPI, PlayerHost {
         this.sound.play('thud', c.x, c.y, Math.min(1, 0.4 + dvc * 0.08));
         if (killed || dvc > 6) this.fx.blood(c.x + vel.x * 0.15, c.y + vel.y * 0.15, killed ? 1.6 : 1.0);
         this.alarm(c.x, c.y, 18, 1);
-        if (v === this.player.vehicle) this.camera.addShake(0.15);
+        if (v === this.player.vehicle) {
+          this.camera.addShake(0.15);
+          const cop = c.role === 'cop';
+          this.crime(killed ? (cop ? 'kill_cop' : 'kill') : cop ? 'assault_cop' : 'hit_ped', c.x, c.y);
+          if (killed && this.rng.chance(0.6)) this.pickups.drop(c.x, c.y, 'money', null, this.rng.int(5, 40));
+        }
       }
     }
   }
@@ -435,24 +506,6 @@ export class Game implements WorldAPI, PlayerHost {
     v.exploded = true;
     v.burning = 0;
     v.health = 0;
-    const R = 9;
-    for (const o of this.vehicles) {
-      if (o === v) continue;
-      const d = Math.hypot(o.x - v.x, o.y - v.y);
-      if (d > R) continue;
-      const k = 1 - d / R;
-      o.damage(60 * k);
-      const dir = Math.atan2(o.y - v.y, o.x - v.x);
-      o.body.applyLinearImpulse({ x: Math.cos(dir) * o.def.mass * 6 * k, y: Math.sin(dir) * o.def.mass * 6 * k }, o.body.getWorldCenter(), true);
-    }
-    for (const c of this.chars) {
-      if (c.dead || c.hidden) continue;
-      const d = Math.hypot(c.x - v.x, c.y - v.y);
-      if (d > R) continue;
-      const dir = Math.atan2(c.y - v.y, c.x - v.x);
-      const k = 1 - d / R;
-      if (!c.damage(120 * k, null, Math.cos(dir) * 10 * k, Math.sin(dir) * 10 * k)) c.knockDown(Math.cos(dir) * 9 * k, Math.sin(dir) * 9 * k, 2);
-    }
     if (v.driver) {
       const dr = v.driver as Character;
       if (dr === this.player.char) {
@@ -464,13 +517,95 @@ export class Game implements WorldAPI, PlayerHost {
       }
       v.driver = null;
     }
-    v.body.applyLinearImpulse({ x: 0, y: 0 }, v.body.getWorldCenter(), true);
-    this.camera.addShake(Math.max(0.2, 1.4 - Math.hypot(v.x - this.player.x, v.y - this.player.y) / 40));
-    this.alarm(v.x, v.y, 40, 2);
-    this.fx.explosion(v.x, v.y);
-    this.sound.play('explosion', v.x, v.y, 1);
-    this.flashT = 0.35;
+    v.body.applyAngularImpulse((Math.random() - 0.5) * v.body.getInertia() * 2.5, true);
+    this.explosionAt(v.x, v.y, 9, 1, (v.lastHitBy as Character | null) ?? null, v);
+  }
+
+  /** Blast damage + impulses + effects. `source` is the exploding vehicle (not damaged again). */
+  explosionAt(x: number, y: number, R: number, power: number, by: Character | null, source: Vehicle | null): void {
+    for (const o of this.vehicles) {
+      if (o === source || o.dead) continue;
+      const d = Math.hypot(o.x - x, o.y - y);
+      if (d > R) continue;
+      const k = 1 - d / R;
+      o.damage((60 * k + (k > 0.55 ? 45 : 0)) * power, by);
+      const dir = Math.atan2(o.y - y, o.x - x);
+      o.body.applyLinearImpulse({ x: Math.cos(dir) * o.def.mass * 6 * k * power, y: Math.sin(dir) * o.def.mass * 6 * k * power }, o.body.getWorldCenter(), true);
+      o.body.applyAngularImpulse((Math.random() - 0.5) * o.body.getInertia() * 3 * k * power, true);
+    }
+    for (const c of this.chars) {
+      if (c.dead || c.hidden) continue;
+      const d = Math.hypot(c.x - x, c.y - y);
+      if (d > R) continue;
+      const dir = Math.atan2(c.y - y, c.x - x);
+      const k = 1 - d / R;
+      const killed = c.damage(120 * k * power, by, Math.cos(dir) * 10 * k, Math.sin(dir) * 10 * k);
+      if (!killed) c.knockDown(Math.cos(dir) * 9 * k, Math.sin(dir) * 9 * k, 2);
+      if (k > 0.5) c.ignite(by);
+      this.onCharHit(c, by, 120 * k * power, killed, 'grenade');
+    }
+    this.camera.addShake(Math.max(0.2, 1.4 - Math.hypot(x - this.player.x, y - this.player.y) / 40) * Math.min(1, power + 0.2));
+    this.alarm(x, y, 40, 2);
+    this.fx.explosion(x, y);
+    this.sound.play('explosion', x, y, Math.min(1, 0.6 + power * 0.4));
+    this.flashT = 0.35 * Math.min(1, power + 0.15);
     this.vibrate(120);
+    if (by) this.onShot(by, x, y, 'grenade');
+  }
+
+  private checkPickups(): void {
+    const pl = this.player;
+    if (pl.char.dead) return;
+    const v = pl.vehicle;
+    const px = pl.x;
+    const py = pl.y;
+    const r = v ? v.def.length / 2 + 0.6 : 1.3;
+    for (const p of this.pickups.list) {
+      if (!p.active) continue;
+      if (Math.abs(p.x - px) > r + 1 || Math.abs(p.y - py) > r + 1) continue;
+      if (Math.hypot(p.x - px, p.y - py) > r) continue;
+      if (this.applyPickup(p)) this.pickups.collect(p);
+    }
+  }
+
+  /** returns false if the pickup can't be used right now (full health etc.) */
+  private applyPickup(p: Pickup): boolean {
+    const c = this.player.char;
+    switch (p.kind) {
+      case 'weapon': {
+        const ars = c.arsenal;
+        if (!ars || !p.weapon) return false;
+        const def = WEAPONS[p.weapon];
+        const added = ars.give(p.weapon, p.amount, !this.player.inVehicle && ars.current === 'fists');
+        if (added <= 0 && def.kind !== 'melee') return false;
+        this.hud.pickupText(def.kind === 'melee' ? def.name.toUpperCase() : `${def.name.toUpperCase()} +${added}`);
+        this.sound.play('pickup', p.x, p.y, 0.8);
+        return true;
+      }
+      case 'health':
+        if (c.health >= c.maxHealth - 0.5) return false;
+        c.health = Math.min(c.maxHealth, c.health + p.amount);
+        this.hud.pickupText('GESUNDHEIT');
+        this.sound.play('pickup', p.x, p.y, 0.8);
+        return true;
+      case 'armor':
+        if (c.armor >= 99) return false;
+        c.armor = Math.min(100, c.armor + p.amount);
+        this.hud.pickupText('SCHUTZWESTE');
+        this.sound.play('pickup', p.x, p.y, 0.8);
+        return true;
+      case 'money':
+        this.money += p.amount;
+        this.hud.pickupText(`+${p.amount} €`, '#7ce07c');
+        this.sound.play('money', p.x, p.y, 0.8);
+        return true;
+      case 'bribe':
+        if (this.wanted.level <= 0) return false;
+        this.wanted.lower(1);
+        this.hud.pickupText('BESTECHUNG', '#6aa0ff');
+        this.sound.play('money', p.x, p.y, 0.8);
+        return true;
+    }
   }
 
   private respawn(): void {
@@ -482,7 +617,11 @@ export class Game implements WorldAPI, PlayerHost {
     c.destroy();
     this.chars.splice(this.chars.indexOf(c), 1);
     const nc = this.spawnChar(h.x, h.y - 2, LOOKS.kai, 'player');
+    nc.arsenal = new Arsenal();
     this.player = new PlayerController(nc, this);
+    this.combat.clear();
+    this.wanted.clear();
+    this.police.clearAll();
     this.money = Math.max(0, this.money - 100);
     this.camera.snap(h.x, h.y, 42);
     this.hud.center('KRANKENHAUS', 2.5, '#ff6a5a');
@@ -520,6 +659,8 @@ export class Game implements WorldAPI, PlayerHost {
         }
       }
     }
+    const heli = this.police.heli;
+    if (heli) this.vehShadows.add(heli.x + SHADOW_DIR.x * heli.z * 0.5, heli.y + SHADOW_DIR.y * heli.z * 0.5, heli.angle, 11, 4.2, 1.5);
     this.vehShadows.end();
     // characters
     this.charShadows.begin();
@@ -532,10 +673,12 @@ export class Game implements WorldAPI, PlayerHost {
       if (x < view.x0 || x > view.x1 || y < view.y0 || y > view.y1) continue;
       const down = c.isDown;
       list.push({ x, y, z: down ? 0.08 : 0.9, rot: c.heading, frame: c.frame(), look: c.look, flash: c.flash });
-      if (!down) this.charShadows.add(x, y, 0, 0.9, 0.9, 1.6);
+      if (!down) this.charShadows.add(x, y, 0, 1.15, 1.15, 1.6);
     }
     this.charShadows.end();
     this.charRenderer.update(list);
+    this.pickupRenderer.update(this.pickups.list, this.time, view);
+    this.policeView.update(this.police.heli, this.police.spikes, alpha);
     const vr = r.viewRect(10);
     this.cityRenderer.update(vr.x0, vr.y0, vr.x1, vr.y1, force);
     r.render();
@@ -651,6 +794,13 @@ export class Game implements WorldAPI, PlayerHost {
         jacked.role = 'ped';
       }
     }
+    const cop = this.police.isPoliceVehicle(v);
+    if (cop) {
+      this.police.onVehicleStolen(v);
+      this.crime('carjack', v.x, v.y);
+      this.wanted.atLeast(1, v.x, v.y);
+    } else if (jacked) this.crime('carjack', v.x, v.y);
+    else if (!v.stolen && !v.missionTag) this.crime('theft', v.x, v.y);
     this.traffic.forgetParked(v);
     v.stolen = true;
   }
@@ -660,13 +810,162 @@ export class Game implements WorldAPI, PlayerHost {
     else this.sound.play('door', v.x, v.y, 0.6);
   }
 
-  onPunch(attacker: Character, target: Character): void {
-    const dir = Math.atan2(target.y - attacker.y, target.x - attacker.x);
-    const killed = target.damage(12, attacker, Math.cos(dir) * 3, Math.sin(dir) * 3);
-    this.sound.play('punch', target.x, target.y, 0.8);
-    if (killed) this.fx.blood(target.x, target.y, 1.2);
-    if (!killed && this.rng.chance(0.35)) target.knockDown(Math.cos(dir) * 3.5, Math.sin(dir) * 3.5, 1.4);
-    this.alarm(target.x, target.y, 12, 0.6);
+  attack(c: Character, pressed: boolean, aimDir: number): void {
+    const ars = c.arsenal;
+    if (!ars) return;
+    const def = ars.def;
+    const range = def.kind === 'melee' ? 2.2 : def.kind === 'throw' ? def.range : def.range * 0.9;
+    const target = def.kind === 'melee' ? null : this.combat.autoAim(c, aimDir, range, def.kind === 'throw' ? 0.6 : 0.95);
+    this.combat.attackOnFoot(c, pressed, aimDir, target);
+  }
+
+  driveBy(c: Character, v: Vehicle): void {
+    if (!this.combat.driveBy(c, v) && c.arsenal && c.arsenal.cooldown <= 0 && !c.arsenal.driveByWeapon()) {
+      c.arsenal.cooldown = 2.5;
+      this.hud.hint('Keine Waffe für Drive-bys (Pistole / MP)', 1.6);
+    }
+  }
+
+  /** A character got hurt (by a weapon, explosion or fire). */
+  onCharHit(target: Character, by: Character | null, dmg: number, killed: boolean, weapon: WeaponId): void {
+    if (target === this.player.char) {
+      this.camera.addShake(Math.min(0.5, dmg * 0.02));
+      this.vibrate(Math.min(60, 10 + dmg));
+      this.hud.hurt(Math.min(1, dmg / 30));
+    }
+    if (by === this.player.char && target !== this.player.char) {
+      const cop = target.role === 'cop';
+      this.crime(killed ? (cop ? 'kill_cop' : 'kill') : cop ? 'assault_cop' : 'assault', target.x, target.y);
+    }
+    if (killed && by === this.player.char && target !== this.player.char) {
+      if (target.role === 'cop') this.pickups.drop(target.x, target.y, 'weapon', 'pistol', 12);
+      else if (this.rng.chance(0.7)) this.pickups.drop(target.x + 0.3, target.y, 'money', null, this.rng.int(5, 45));
+    }
+    void weapon;
+  }
+
+  /** A vehicle was shot / hit by a melee weapon. */
+  onVehicleShot(v: Vehicle, by: Character | null, dmg: number): void {
+    if (by && by === this.player.char) this.traffic.panic(v);
+    void dmg;
+  }
+
+  /** Somebody fired a weapon / caused an explosion at (x, y). */
+  onShot(shooter: Character, x: number, y: number, weapon: WeaponId): void {
+    if (shooter !== this.player.char) return;
+    this.crime(weapon === 'grenade' || weapon === 'molotov' ? 'explosion' : 'shooting', x, y);
+  }
+
+  /** report a crime by the player at (x, y) */
+  crime(type: Crime, x: number, y: number): void {
+    const seen = this.police.isWitnessed(x, y);
+    this.wanted.crime(type, x, y, seen);
+    if (seen) this.police.alert(x, y);
+  }
+
+  slowMo(scale: number, secs: number): void {
+    this.timeScale = scale;
+    this.slowT = secs;
+  }
+
+  /** a pursuing police car was wrecked */
+  onTakedown(v: Vehicle): void {
+    const lvl = this.wanted.takedown();
+    this.hud.center('TAKEDOWN!', 1.4, '#ffd23a');
+    this.hud.hint(lvl > 0 ? `Fahndungsstufe ${lvl}` : 'Fahndung eingestellt', 1.8);
+    this.sound.play('takedown', undefined, undefined, 0.9);
+    this.slowMo(0.35, 0.45);
+    this.camera.addShake(0.35);
+    this.vibrate(90);
+    void v;
+  }
+
+  onTiresPopped(v: Vehicle): void {
+    this.sound.play('hit_metal', v.x, v.y, 0.8, 0.7);
+    this.fx.sparks(v.x, v.y, 0, 0, 10);
+    if (v === this.player.vehicle) {
+      this.hud.hint('Reifen zerstochen!', 1.8);
+      this.vibrate(60);
+      this.camera.addShake(0.2);
+    }
+  }
+
+  /** the police got you */
+  bust(): void {
+    if (this.bustedT > 0 || this.player.char.dead) return;
+    this.bustedT = 0.001;
+    this.bustFine = Math.min(this.money, 100 + this.wanted.level * 150);
+    this.hud.center('FESTGENOMMEN', 3.2, '#6aa0ff');
+    this.sound.play('busted', undefined, undefined, 0.9);
+    this.vibrate(150);
+  }
+
+  private afterBust(): void {
+    this.bustedT = 0;
+    const pl = this.player;
+    if (pl.vehicle) pl.exit(pl.vehicle, true);
+    const c = pl.char;
+    c.arsenal?.clear();
+    c.burnT = 0;
+    this.money -= this.bustFine;
+    this.wanted.clear();
+    this.police.clearAll();
+    this.combat.clear();
+    const p = this.city.pois.get('police')!;
+    c.showAt(p.x, p.y + 1.5, Math.PI / 2);
+    this.camera.snap(p.x, p.y, 42);
+    this.hud.center('', 0.01);
+    this.hud.hint(`Geldstrafe ${this.bustFine} € · Waffen beschlagnahmt`, 3.5);
+  }
+
+  /** Lackiererei: respray clears the wanted level (and repairs the car) */
+  private checkPaintShops(dt: number): void {
+    const v = this.player.vehicle;
+    if (this.paintHintT > 0) this.paintHintT -= dt;
+    if (this.sprayT > 0) {
+      this.sprayT -= dt;
+      return;
+    }
+    if (!v || v.dead) return;
+    const hint = (t: string): void => {
+      if (this.paintHintT > 0) return;
+      this.paintHintT = 5;
+      this.hud.hint(t, 2.4);
+    };
+    for (const id of ['paint1', 'paint2']) {
+      const p = this.city.pois.get(id);
+      if (!p || Math.hypot(v.x - p.x, v.y - p.y) > 8 || v.speed > 3) continue;
+      const wanted = this.wanted.level > 0;
+      const damaged = v.health < v.maxHealth * 0.98 || v.flatTires;
+      if (!wanted && !damaged) {
+        hint('Lackiererei: Umlackieren 300 € – die Bullen erkennen dich nicht mehr.');
+        return;
+      }
+      if (wanted && this.police.seen) {
+        hint('Nicht, solange die Bullen zusehen!');
+        return;
+      }
+      const cost = wanted ? 300 : 120;
+      if (this.money < cost) {
+        hint(`Lackieren kostet ${cost} €`);
+        return;
+      }
+      this.money -= cost;
+      if (wanted) this.wanted.clear();
+      v.health = v.maxHealth;
+      v.burning = 0;
+      v.flatTires = false;
+      const choices = v.def.colors.filter((c) => c !== v.paint);
+      if (choices.length && !v.def.emergency) {
+        v.paint = this.rng.pick(choices);
+        this.views.get(v)?.setPaint(v.paint);
+      }
+      this.sound.play('spray', v.x, v.y, 0.9);
+      this.hud.center('FRISCH LACKIERT', 2, '#7ce07c');
+      this.hud.hint(`-${cost} €`, 2);
+      this.sprayT = 5;
+      return;
+    }
   }
 
   hint(text: string, secs = 2): void {
@@ -701,6 +1000,17 @@ export class Game implements WorldAPI, PlayerHost {
     if (p.vehicle) p.vehicle.body.setTransform({ x, y }, p.vehicle.angle);
     else p.char.showAt(x, y, p.char.heading);
     this.camera.snap(x, y);
+  }
+
+  /** debug: give the player a weapon and select it */
+  give(id: WeaponId, ammo?: number): void {
+    this.player.char.arsenal?.give(id, ammo, true);
+  }
+
+  /** debug: spawn a pedestrian relative to the player */
+  spawnPed(dx: number, dy: number, role: Role = 'ped'): Character {
+    const c = this.spawnChar(this.player.x + dx, this.player.y + dy, role === 'cop' ? LOOKS.cop : randomLook(this.rng), role);
+    return c;
   }
 
   setClock(h: number): void {

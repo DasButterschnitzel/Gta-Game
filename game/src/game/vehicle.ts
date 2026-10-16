@@ -84,6 +84,9 @@ export class Vehicle {
   private sinceHandbrake = 9;
   sirenOn = false;
   lightsOn = false;
+  /** tyres shredded by a spike strip */
+  flatTires = false;
+  private wobble = 0;
   reversing = false;
   braking = false;
   surface: SurfaceInfo = { grip: 1, roll: 1, water: false };
@@ -230,6 +233,10 @@ export class Vehicle {
     const vRef = Math.max(Math.abs(vx), speed * 0.9);
     const maxSteer = Math.min(def.steerMax, (L * muEst * g * 1.2) / Math.max(vRef * vRef, 1) + 0.035);
     let target = clamp(this.steerIn, -1, 1) * maxSteer;
+    if (this.flatTires && speed > 3) {
+      this.wobble += dt * (4 + speed * 0.4);
+      target += Math.sin(this.wobble) * 0.03 + Math.sin(this.wobble * 2.3) * 0.015;
+    }
     // drift assist: when the rear is sliding, help counter-steer
     const beta = speed > 3 ? Math.atan2(vy, Math.max(Math.abs(vx), 0.1)) : 0;
     if (this.assisted && vx > 6 && Math.abs(beta) > 0.08 && Math.abs(beta) < 1.0 && !this.handbrake) {
@@ -255,7 +262,7 @@ export class Vehicle {
     const damageFactor = this.health < this.maxHealth * 0.3 ? 0.55 + 0.45 * (this.health / (this.maxHealth * 0.3)) : 1;
     let Fdrive = 0;
     if (throttle > 0) {
-      const p = def.power * damageFactor;
+      const p = def.power * damageFactor * (this.flatTires ? 0.55 : 1);
       Fdrive = throttle * Math.min(def.accelCap * m, p / Math.max(Math.abs(vx), 2.5));
       if (this.shiftT > 0) Fdrive *= 0.35;
       if (vx < -0.5) Fdrive += throttle * m * 4; // help stop when rolling backwards
@@ -275,7 +282,7 @@ export class Vehicle {
     const transfer = (m * this.ax * TUNE.cgHeight) / L;
     const Wf = Math.max(0.2 * m * g, (m * g * bb) / L - transfer);
     const Wr = Math.max(0.2 * m * g, (m * g * a) / L + transfer);
-    const mu = def.grip * surf.grip * TUNE.gripScale;
+    const mu = def.grip * surf.grip * TUNE.gripScale * (this.flatTires ? 0.6 : 1);
 
     let FxF = 0;
     let FxR = 0;
@@ -419,7 +426,7 @@ export class Vehicle {
   /** Apply damage (and start fire / explode thresholds are handled by game). */
   damage(amount: number, by: unknown = null): void {
     if (this.exploded) return;
-    this.health -= amount;
+    this.health -= amount * (this.def.armor ?? 1);
     if (by) this.lastHitBy = by;
     if (this.health <= 0 && this.burning <= 0) {
       this.health = 0;

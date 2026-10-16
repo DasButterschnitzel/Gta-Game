@@ -36,7 +36,7 @@ def write(name, x, sr=SR, q=4):
         w.setframerate(sr)
         w.writeframes(pcm.tobytes())
     out = os.path.join(OUT, name + '.ogg')
-    subprocess.run(['ffmpeg', '-y', '-loglevel', 'error', '-i', tmp, '-c:a', 'libvorbis', '-q:a', str(q), out], check=True)
+    subprocess.run(['ffmpeg', '-y', '-loglevel', 'error', '-i', tmp, '-map_metadata', '-1', '-fflags', '+bitexact', '-flags:a', '+bitexact', '-c:a', 'libvorbis', '-q:a', str(q), out], check=True)
     os.unlink(tmp)
     print(f'{name:22s} {len(x) / sr:5.2f}s  {os.path.getsize(out) / 1024:6.1f} KB')
 
@@ -405,6 +405,129 @@ def punch():
     return fade(norm(body + slap * 0.7, 0.9), 0.0005, 0.02)
 
 
+# ----------------------------------------------------------------------------------------------
+# weapons & police (v0.2)
+# ----------------------------------------------------------------------------------------------
+def gunshot(body_f=110, body_tau=0.035, crack_tau=0.008, tail_tau=0.16, bright=(700, 7000), dur=0.6, drive=2.2, tail_amt=0.35):
+    n = int(dur * SR)
+    t = np.arange(n) / SR
+    crack = filt(sos_bp(*bright), RNG.standard_normal(n)) * np.exp(-t / crack_tau)
+    body = np.sin(2 * np.pi * (body_f * (1 + 1.5 * np.exp(-t / 0.01))) * t) * np.exp(-t / body_tau)
+    tail = filt(sos_bp(250, 2500), RNG.standard_normal(n)) * np.exp(-t / tail_tau)
+    out = norm(crack) * 1.0 + norm(body) * 0.9 + norm(tail) * tail_amt
+    return fade(norm(np.tanh(out * drive), 0.95), 0.0003, 0.05)
+
+
+def whoosh(dur=0.25, f0=500, f1=1600, amt=1.0):
+    n = int(dur * SR)
+    t = np.arange(n) / SR
+    env = np.sin(np.pi * t / dur) ** 2
+    out = np.zeros(n)
+    noise = RNG.standard_normal(n)
+    # crude sweep: blend of fixed bands weighted over time
+    bands = np.linspace(f0, f1, 6)
+    for i, f in enumerate(bands):
+        w = np.exp(-((t / dur - i / (len(bands) - 1)) ** 2) / 0.05)
+        out += filt(sos_bp(f * 0.7, f * 1.3), noise) * w
+    return fade(norm(out * env, 0.7 * amt), 0.002, 0.02)
+
+
+def wood_hit():
+    n = int(0.3 * SR)
+    t = np.arange(n) / SR
+    knock = resonator(RNG.standard_normal(n) * np.exp(-t / 0.004), 780, 18) + resonator(RNG.standard_normal(n) * np.exp(-t / 0.004), 1530, 22) * 0.6
+    th = np.sin(2 * np.pi * (120 * np.exp(-t / 0.04) + 70) * t) * np.exp(-t / 0.05)
+    return fade(norm(norm(knock) * 0.8 + th * 0.7, 0.9), 0.0005, 0.05)
+
+
+def ricochet():
+    n = int(0.35 * SR)
+    t = np.arange(n) / SR
+    f = 2600 * np.exp(-t / 0.4) + 1500
+    ping = np.sin(2 * np.pi * np.cumsum(f) / SR) * np.exp(-t / 0.07)
+    tick = filt(sos_hp(2000), RNG.standard_normal(n)) * np.exp(-t / 0.003)
+    return fade(norm(ping * 0.6 + norm(tick) * 0.8, 0.7), 0.0003, 0.05)
+
+
+def flesh_hit():
+    n = int(0.16 * SR)
+    t = np.arange(n) / SR
+    body = np.sin(2 * np.pi * (90 * np.exp(-t / 0.03) + 55) * t) * np.exp(-t / 0.035)
+    slap = filt(sos_bp(300, 2200), RNG.standard_normal(n)) * np.exp(-t / 0.012)
+    return fade(norm(body + norm(slap) * 0.5, 0.75), 0.0005, 0.02)
+
+
+def molotov():
+    glass = metal_hit(0.7, [(3200, 0.2, 0.05)], 0.04, 0.25, 0.0, 1.0)
+    n = int(1.4 * SR)
+    t = np.arange(n) / SR
+    swell = filt(sos_lp(1200), RNG.standard_normal(n)) * (1 - np.exp(-t / 0.08)) * np.exp(-t / 0.5)
+    out = np.zeros(n)
+    out[:len(glass)] += glass * 0.8
+    out += norm(swell) * 0.8
+    return fade(norm(np.tanh(out * 1.3), 0.9), 0.0005, 0.2)
+
+
+def heli_loop():
+    dur = 1.0
+    n = int(dur * SR)
+    t = np.arange(n) / SR
+    bpf = 18  # blade passes per second (integer -> seamless)
+    phase = (t * bpf) % 1.0
+    thump_env = np.exp(-phase / 0.09)
+    noise = RNG.standard_normal(n)
+    thump = periodic(lambda s: filt(sos_lp(420, 2), s), noise * thump_env)
+    sub = np.sin(2 * np.pi * bpf * t) * 0.6 + np.sin(2 * np.pi * bpf * 2 * t) * 0.25
+    whine = np.sin(2 * np.pi * 1150 * t) * 0.05 + np.sin(2 * np.pi * 2300 * t) * 0.02
+    hiss = periodic(lambda s: filt(sos_bp(1500, 5000), s), RNG.standard_normal(n)) * 0.08
+    out = norm(thump) * 0.9 + sub * 0.5 + whine + norm(hiss) * 0.12
+    return norm(np.tanh(out * 1.2), 0.75)
+
+
+def spray():
+    n = int(1.8 * SR)
+    t = np.arange(n) / SR
+    hiss = filt(sos_hp(2500), RNG.standard_normal(n))
+    trem = 0.75 + 0.25 * np.sin(2 * np.pi * 7 * t)
+    env = np.minimum(1, t / 0.03) * np.minimum(1, (1.8 - t) / 0.15)
+    rattle = np.zeros(n)
+    for k in range(6):
+        pos = int((0.05 + k * 0.045) * SR)
+        ln = int(0.02 * SR)
+        rattle[pos:pos + ln] += np.sin(2 * np.pi * 2400 * np.arange(ln) / SR) * np.exp(-np.arange(ln) / (SR * 0.004))
+    return fade(norm(norm(hiss) * trem * env * 0.6 + rattle * 0.3, 0.6), 0.002, 0.1)
+
+
+def sting(notes, dur_each=0.09, decay=0.5, bass=None, wave='saw'):
+    total = dur_each * len(notes) + decay + 0.3
+    n = int(total * SR)
+    out = np.zeros(n)
+    for i, f in enumerate(notes):
+        pos = int(i * dur_each * SR)
+        ln = n - pos
+        tt = np.arange(ln) / SR
+        if wave == 'saw':
+            v = signal.sawtooth(2 * np.pi * f * tt) * 0.5 + signal.sawtooth(2 * np.pi * f * 1.005 * tt) * 0.5
+        else:
+            v = signal.square(2 * np.pi * f * tt, 0.5)
+        v = filt(sos_lp(min(6000, f * 5)), v) * np.exp(-tt / decay)
+        out[pos:] += v * 0.5
+    if bass:
+        tt = np.arange(n) / SR
+        out += np.sin(2 * np.pi * bass * tt) * np.exp(-tt / 0.35) * 0.9
+        out += filt(sos_lp(200), RNG.standard_normal(n)) * np.exp(-tt / 0.05) * 0.6
+    return fade(norm(np.tanh(out * 1.4), 0.85), 0.001, 0.2)
+
+
+def static_burst(dur=0.45):
+    n = int(dur * SR)
+    t = np.arange(n) / SR
+    x = filt(sos_bp(400, 6000), RNG.standard_normal(n))
+    crackle = (RNG.random(n) < 0.004) * RNG.standard_normal(n) * 4
+    env = np.minimum(1, t / 0.01) * np.minimum(1, (dur - t) / 0.08)
+    return fade(norm((norm(x) * 0.5 + crackle) * env, 0.5), 0.002, 0.05)
+
+
 def main():
     for kind, (lo, hi) in ENGINE_RPM.items():
         write(f'eng_{kind}_lo', engine_loop(kind, lo))
@@ -433,6 +556,23 @@ def main():
     write('splash', splash())
     write('fire', fire_loop())
     write('ambient', ambient_city(), sr=22050, q=2)
+    # v0.2: weapons & police
+    write('pistol', gunshot(body_f=120, body_tau=0.03, crack_tau=0.007, tail_tau=0.14, dur=0.5, drive=2.4))
+    write('smg', gunshot(body_f=150, body_tau=0.018, crack_tau=0.005, tail_tau=0.07, bright=(900, 8000), dur=0.25, drive=2.0, tail_amt=0.25))
+    write('shotgun', gunshot(body_f=75, body_tau=0.08, crack_tau=0.02, tail_tau=0.3, bright=(400, 5000), dur=0.9, drive=2.8, tail_amt=0.5))
+    write('rifle', gunshot(body_f=100, body_tau=0.03, crack_tau=0.006, tail_tau=0.18, bright=(1200, 9000), dur=0.55, drive=2.6, tail_amt=0.4))
+    write('swing', whoosh(0.22, 400, 1500, 0.8))
+    write('throw', whoosh(0.3, 300, 1000, 0.6))
+    write('bat_hit', wood_hit())
+    write('hit_metal', ricochet())
+    write('hit_flesh', flesh_hit())
+    write('clink', metal_hit(0.25, [(2100, 0.6, 0.04), (3400, 0.4, 0.03), (5200, 0.2, 0.02)], 0.01, 0.2, 0.0))
+    write('molotov', molotov())
+    write('heli', heli_loop())
+    write('spray', spray())
+    write('takedown', sting([523.3, 659.3, 784.0, 1046.5], 0.06, 0.35, bass=65.4))
+    write('busted', sting([392.0, 311.1, 261.6, 196.0], 0.16, 0.6, bass=49.0, wave='square'))
+    write('static', static_burst())
 
 
 if __name__ == '__main__':

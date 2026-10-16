@@ -340,7 +340,8 @@ export class CharacterRenderer {
           float a = iPos.w - 1.5707963;
           float c = cos(a);
           float s = sin(a);
-          vec2 p = vec2(position.x * c - position.y * s, position.x * s + position.y * c);
+          // drawn ~30 % larger than life so people read well on small phone screens
+          vec2 p = vec2(position.x * c - position.y * s, position.x * s + position.y * c) * 1.3;
           vec3 wp = vec3(iPos.xy + p, iPos.z);
           vWorld = wp;
           float f = iFrame.x;

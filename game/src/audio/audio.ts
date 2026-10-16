@@ -7,6 +7,8 @@ export const SOUND_FILES = [
   'eng_diesel_lo', 'eng_diesel_hi', 'eng_two_lo', 'eng_two_hi', 'eng_truck_lo', 'eng_truck_hi', 'eng_ev_lo', 'eng_ev_hi',
   'skid', 'crash_light', 'crash_mid', 'crash_heavy', 'glass', 'explosion', 'horn', 'horn_truck', 'siren', 'thud', 'punch',
   'step0', 'step1', 'step2', 'door', 'click', 'money', 'pickup', 'pass', 'wasted', 'splash', 'fire', 'ambient',
+  'pistol', 'smg', 'shotgun', 'rifle', 'swing', 'throw', 'bat_hit', 'hit_metal', 'hit_flesh', 'clink', 'molotov',
+  'heli', 'spray', 'takedown', 'busted', 'static',
 ];
 
 /** sample rpm points must match tools/gen_audio.py */

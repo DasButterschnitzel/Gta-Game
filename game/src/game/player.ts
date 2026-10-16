@@ -10,7 +10,10 @@ export interface PlayerHost {
   isFreeSpot(x: number, y: number, r: number): boolean;
   onEnterVehicle(v: Vehicle, jacked: Character | null): void;
   onExitVehicle(v: Vehicle, bailed: boolean): void;
-  onPunch(attacker: Character, target: Character): void;
+  /** attack with the current weapon on foot; aimDir = intended direction (rad) */
+  attack(c: Character, pressed: boolean, aimDir: number): void;
+  /** shoot out of the car window */
+  driveBy(c: Character, v: Vehicle): void;
   hint(text: string, secs?: number): void;
 }
 
@@ -86,13 +89,11 @@ export class PlayerController {
     if (mag > 0.05) c.setMove((inp.moveX / mag) * speed, (inp.moveY / mag) * speed);
     else c.setMove(0, 0);
 
-    if (inp.firePressed) {
-      c.punch();
-      const reach = 1.25;
-      const tx = c.x + Math.cos(c.heading) * reach * 0.7;
-      const ty = c.y + Math.sin(c.heading) * reach * 0.7;
-      const target = this.host.findCharacterNear(tx, ty, reach, c);
-      if (target) this.host.onPunch(c, target);
+    if (inp.weaponNext) c.arsenal?.cycle(1);
+    if (inp.weaponPrev) c.arsenal?.cycle(-1);
+    if (inp.fire || inp.firePressed) {
+      const aimDir = mag > 0.3 ? Math.atan2(inp.moveY, inp.moveX) : c.heading;
+      this.host.attack(c, inp.firePressed, aimDir);
     }
 
     if (inp.enterPressed && this.exitCooldown <= 0) {
@@ -175,6 +176,9 @@ export class PlayerController {
     v.brake = inp.brake;
     v.handbrake = inp.handbrake;
     v.horn = inp.horn;
+    if (inp.weaponNext) this.char.arsenal?.cycle(1);
+    if (inp.weaponPrev) this.char.arsenal?.cycle(-1);
+    if (inp.fire) this.host.driveBy(this.char, v);
     if (inp.enterPressed) this.exit(v);
     void dt;
   }

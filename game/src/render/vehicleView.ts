@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import type { Vehicle } from '../game/vehicle';
 import { vehicleGeometry, vehicleMaterial } from './vehicleModel';
+import { rgb } from './geom';
 
 export class VehicleView {
   readonly mesh: THREE.Mesh;
@@ -37,6 +38,12 @@ export class VehicleView {
     lights.w = v.sirenOn && !v.exploded ? 1 : 0;
     this.sirenT += dt;
     u.uSirenT.value = this.sirenT;
+  }
+
+  /** respray: change the body colour */
+  setPaint(paint: number): void {
+    const [r, g, b] = rgb(paint);
+    (this.mat.uniforms.uPaint.value as THREE.Color).setRGB(r, g, b);
   }
 
   setHighlight(on: number): void {

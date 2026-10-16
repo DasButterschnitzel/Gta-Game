@@ -23,6 +23,13 @@ export class RNG {
     return a + Math.floor(this.next() * (b - a + 1));
   }
 
+  /** Standard normal sample (Box-Muller). */
+  gauss(): number {
+    const u = Math.max(1e-9, this.next());
+    const v = this.next();
+    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+  }
+
   chance(p: number): boolean {
     return this.next() < p;
   }

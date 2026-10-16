@@ -1,8 +1,9 @@
 // Characters (player and pedestrians): circle body, simple state machine, sprite frames.
 import * as planck from 'planck';
 import { Physics, CAT_CHAR, CAT_STATIC, CAT_VEHICLE, CAT_BARRIER, CAT_DEAD, type PhysTag } from '../physics/physics';
-import { F_WALK, F_RUN, F_IDLE, F_PUNCH, F_DEAD, F_DOWN, F_PISTOL, F_RIFLE, F_BAT, F_SIT, type CharLook } from '../render/charSprites';
+import { F_WALK, F_RUN, F_IDLE, F_PUNCH, F_DEAD, F_DOWN, F_PISTOL, F_RIFLE, F_BAT, F_SIT, F_THROW, type CharLook } from '../render/charSprites';
 import type { Vehicle } from './vehicle';
+import type { Arsenal } from './weapons';
 import { clamp, angleDiff } from '../core/math';
 import { RNG } from '../core/rng';
 
@@ -50,6 +51,17 @@ export class Character {
   panic = 0;
   lastAttacker: Character | null = null;
   removeMe = false;
+  /** weapons (player and armed NPCs) */
+  arsenal: Arsenal | null = null;
+  /** attacks the player on sight */
+  hostile = false;
+  /** seconds left in the aiming pose */
+  aimT = 0;
+  private throwT = 0;
+  private batSwing = false;
+  /** seconds left burning */
+  burnT = 0;
+  burnBy: Character | null = null;
 
   constructor(
     readonly physics: Physics,
@@ -103,6 +115,12 @@ export class Character {
     this.prevX = pos.x;
     this.prevY = pos.y;
     if (this.flash > 0) this.flash = Math.max(0, this.flash - dt * 4);
+    if (this.arsenal && this.arsenal.cooldown > 0) this.arsenal.cooldown -= dt;
+    if (this.throwT > 0) this.throwT -= dt;
+    if (this.aimT > 0) {
+      this.aimT -= dt;
+      if (this.aimT <= 0 && this.state === 'aim') this.state = 'idle';
+    }
     if (this.hidden) return;
     const v = this.body.getLinearVelocity();
     if (this.state === 'dead') {
@@ -214,14 +232,34 @@ export class Character {
     this.state = 'idle';
   }
 
-  punch(): void {
-    if (this.isDown || this.attackT > 0) return;
+  punch(bat = false): void {
+    if (this.isDown) return;
     this.state = 'attack';
-    this.attackT = 0.32;
+    this.attackT = bat ? 0.4 : 0.32;
+    this.batSwing = bat;
     this.attackFrame = (this.attackFrame + 1) % 2;
   }
 
+  /** hold the aiming pose for t seconds */
+  aim(t: number): void {
+    if (this.isDown) return;
+    this.aimT = Math.max(this.aimT, t);
+    if (this.state !== 'attack') this.state = 'aim';
+  }
+
+  throwAnim(): void {
+    this.throwT = 0.35;
+  }
+
+  ignite(by: Character | null): void {
+    if (this.dead || this.hidden) return;
+    if (this.burnT <= 0) this.flash = 1;
+    this.burnT = Math.max(this.burnT, 3.2);
+    if (by) this.burnBy = by;
+  }
+
   frame(): number {
+    if (this.throwT > 0 && !this.isDown) return F_THROW;
     switch (this.state) {
       case 'dead':
         return F_DEAD + (this.id % 2);
@@ -230,7 +268,7 @@ export class Character {
       case 'sitting':
         return F_SIT;
       case 'attack':
-        if (this.weaponPose === 'bat') return F_BAT + (this.attackT > 0.16 ? 0 : 1);
+        if (this.batSwing) return F_BAT + (this.attackT > 0.2 ? 0 : 1);
         return F_PUNCH + (this.attackT > 0.16 ? 0 : 1);
       case 'aim':
         return this.weaponPose === 'rifle' ? F_RIFLE : F_PISTOL;
@@ -275,4 +313,13 @@ export const LOOKS = {
   kai: { skin: 0xe2b28e, hair: 0x2a221c, top: 0x2a2d33, bottom: 0x3a4a62, shoes: 0x1a1a1a, accent: 0x8a8a8a } as CharLook,
   cop: { skin: 0xe8b896, hair: 0x1e2a44, top: 0x2a3e72, bottom: 0x1e2436, shoes: 0x111111, accent: 0xd8e01a } as CharLook,
   medic: { skin: 0xd8a07a, hair: 0x3a2a1e, top: 0xff5a2a, bottom: 0xe8e8e8, shoes: 0x1a1a1a, accent: 0xe8e8e8 } as CharLook,
+  /** SEK: black helmet and overalls */
+  sek: { skin: 0xd8a07a, hair: 0x15181c, top: 0x1c2230, bottom: 0x1c2230, shoes: 0x0e0e0e, accent: 0x3a4250 } as CharLook,
+  /** BSE-9 federal unit: olive armour, yellow patch */
+  bse: { skin: 0xc89070, hair: 0x2a2e26, top: 0x3a4232, bottom: 0x2e3428, shoes: 0x111111, accent: 0xd8c01a } as CharLook,
 };
+
+/** plain-clothes officer (BKA): leather jacket, jeans, yellow armband */
+export function zivilLook(rng: RNG): CharLook {
+  return { skin: rng.pick(SKINS), hair: rng.pick(HAIRS), top: rng.pick([0x2a2a30, 0x3a2a22, 0x1e2228]), bottom: rng.pick([0x2e3a5a, 0x2a2a2e]), shoes: 0x1a1a1a, accent: 0xd8e01a };
+}
