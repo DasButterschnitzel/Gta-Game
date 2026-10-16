@@ -27,7 +27,7 @@ export interface ModelSpec {
   trim?: number;
   wheelR?: number;
   /** emergency vehicles: livery drawing key */
-  livery?: 'police' | 'taxi' | 'ambulance' | 'fire' | 'parcel' | 'sek' | 'gti' | 'bus' | 'garbage' | 'race' | 'bse';
+  livery?: 'police' | 'taxi' | 'ambulance' | 'fire' | 'parcel' | 'sek' | 'gti' | 'bus' | 'garbage' | 'race' | 'bse' | 'kronwache' | 'beweis';
 }
 
 export interface VehicleDef {
@@ -471,6 +471,53 @@ export const VEHICLES: Record<string, VehicleDef> = {
     heavy: true,
     emergency: 'sek',
     model: { body: 'van', cabRear: 0.0, cabFront: 0.82, roofRear: 0.0, roofFront: 0.76, beltZ: 1.1, roofZ: 2.7, roofInset: 0.08, chamfer: 0.38, hoodDrop: 0.22, lightbar: 'police', livery: 'bse', glass: 0x1a2026 },
+  },
+  kronwache: {
+    id: 'kronwache',
+    name: 'Mercator GX',
+    length: 4.9,
+    width: 1.98,
+    height: 1.9,
+    wheelbase: 2.89,
+    mass: 2450,
+    power: 290e3,
+    topSpeed: 64,
+    accelCap: 7.0,
+    grip: 1.15,
+    drive: 'AWD',
+    brake: 11,
+    steerMax: 0.56,
+    engine: 'v8',
+    health: 230,
+    armor: 0.75,
+    colors: [0x1d2024],
+    traffic: 0,
+    value: 42000,
+    model: { body: 'wagon', cabRear: 0.05, cabFront: 0.7, roofRear: 0.06, roofFront: 0.6, beltZ: 1.1, roofZ: 1.9, roofInset: 0.1, chamfer: 0.2, hoodDrop: 0.06, glass: 0x2a323c, trim: 0x9aa0a8, wheelR: 0.4, livery: 'kronwache' },
+  },
+  beweis: {
+    id: 'beweis',
+    name: 'Polizei Beweismitteltransporter',
+    length: 5.93,
+    width: 2.0,
+    height: 2.5,
+    wheelbase: 3.66,
+    mass: 2700,
+    power: 120e3,
+    topSpeed: 42,
+    accelCap: 4.0,
+    grip: 1.0,
+    drive: 'RWD',
+    brake: 9,
+    steerMax: 0.6,
+    engine: 'diesel',
+    health: 210,
+    colors: [0xdfe3e6],
+    traffic: 0,
+    value: 6000,
+    siren: true,
+    emergency: 'police',
+    model: { body: 'van', cabRear: 0.0, cabFront: 0.8, roofRear: 0.0, roofFront: 0.74, beltZ: 1.0, roofZ: 2.5, roofInset: 0.06, chamfer: 0.24, hoodDrop: 0.18, lightbar: 'police', livery: 'beweis' },
   },
   rtw: {
     id: 'rtw',

@@ -5,18 +5,17 @@ import type { Game } from './game';
 import type { Vehicle } from './vehicle';
 import { Character, LOOKS, RUN_SPEED, WALK_SPEED, zivilLook } from './character';
 import { Arsenal, type WeaponId } from './weapons';
-import { findRoute, walkAhead, findFootPath, walkableLine } from '../world/route';
-import { projectOnEdge } from './traffic';
+import { walkAhead, findFootPath, walkableLine } from '../world/route';
+import { PursuitDriver, type DriveState } from './pursuit';
 import { RNG } from '../core/rng';
 import { clamp, angleDiff } from '../core/math';
-import { CAT_STATIC, CAT_BARRIER } from '../physics/physics';
-import { TILE, Turn } from '../world/types';
+import { TILE } from '../world/types';
 import type { Blip } from '../ui/hud';
 
 export type UnitKind = 'polizei' | 'sek' | 'zivil' | 'bse';
 type UnitMode = 'patrol' | 'pursue' | 'stopped' | 'disabled' | 'block' | 'leave';
 
-export interface Unit {
+export interface Unit extends DriveState {
   id: number;
   kind: UnitKind;
   v: Vehicle;
@@ -109,8 +108,11 @@ export class PoliceSystem {
   private blockT = 8;
   private losT = 0;
   private patrolT = 4;
+  private driver: PursuitDriver;
 
-  constructor(private g: Game) {}
+  constructor(private g: Game) {
+    this.driver = new PursuitDriver(g);
+  }
 
   private get level(): number {
     return this.g.wanted.level;
@@ -519,7 +521,7 @@ export class PoliceSystem {
   }
 
   // ------------------------------------------------------------------------------------
-  // pursuit driving
+  // pursuit driving (shared driver in pursuit.ts)
   private drivePursuit(u: Unit, dt: number): void {
     const g = this.g;
     const v = u.v;
@@ -533,23 +535,9 @@ export class PoliceSystem {
     const dist = Math.hypot(tx - v.x, ty - v.y);
     v.sirenOn = true;
     v.lightsOn = true;
-    if (u.reverseT > 0) {
-      u.reverseT -= dt;
-      v.throttle = 0;
-      v.brake = 1;
-      v.handbrake = false;
-      v.steerIn = u.reverseSteer;
-      return;
-    }
+    if (this.driver.reversing(u, v, dt)) return;
     // the target may be off the road network (parks, courtyards): aim for the closest road point
-    u.goalT -= dt;
-    if (u.goalT <= 0) {
-      u.goalT = 1.2;
-      const h = g.city.nearestLane(tx, ty, 160, undefined, Math.PI, false);
-      u.gx = h ? h.px : tx;
-      u.gy = h ? h.py : ty;
-      u.offroad = h ? h.dist : 999;
-    }
+    this.driver.updateGoal(u, tx, ty, dt);
     const toGoal = Math.hypot(u.gx - v.x, u.gy - v.y);
     const pv = g.player.vehicle;
     if (w.searching && dist < 12) {
@@ -562,76 +550,7 @@ export class PoliceSystem {
       this.deploy(u, 'chase');
       return;
     }
-    // stuck: back out
-    if (v.throttle > 0.4 && v.speed < 1.2) {
-      u.stuckT += dt;
-      if (u.stuckT > 1.3) {
-        u.stuckT = 0;
-        u.reverseT = 1.1;
-        u.reverseSteer = v.steerIn > 0 ? -1 : 1;
-      }
-    } else u.stuckT = Math.max(0, u.stuckT - dt);
-  }
-
-  /** left/right feelers against walls; returns a steering bias */
-  private whiskers(v: Vehicle): number {
-    const g = this.g;
-    const c = Math.cos(v.angle);
-    const s = Math.sin(v.angle);
-    const fx = v.x + c * v.def.length * 0.5;
-    const fy = v.y + s * v.def.length * 0.5;
-    const L = 4 + v.speed * 0.75;
-    const probe = (da: number): number => {
-      const a = v.angle + da;
-      const hit = g.combat.ray(fx, fy, fx + Math.cos(a) * L, fy + Math.sin(a) * L, v, null, CAT_STATIC | CAT_BARRIER);
-      return hit ? 1 - hit.frac : 0;
-    };
-    const l = probe(0.42);
-    const r = probe(-0.42);
-    const m = probe(0);
-    let bias = (r - l) * 1.1;
-    if (m > 0.3) bias += (l <= r ? 1 : -1) * m * 0.9;
-    return bias;
-  }
-
-  /**
-   * Local planner: probe headings around the desired one (two parallel rays per heading so the
-   * whole car width is checked) and pick the clearest that still points towards the target.
-   */
-  private plan(u: Unit, desired: number, dt: number): void {
-    u.planT -= dt;
-    if (u.planT > 0) return;
-    u.planT = 0.1;
-    const g = this.g;
-    const v = u.v;
-    const L = 7 + v.speed * 0.9;
-    const half = v.def.width / 2 + 0.25;
-    const fx = v.x + Math.cos(v.angle) * v.def.length * 0.35;
-    const fy = v.y + Math.sin(v.angle) * v.def.length * 0.35;
-    let best = desired;
-    let bestScore = -Infinity;
-    let bestFree = 1;
-    for (let k = -5; k <= 5; k++) {
-      const a = desired + k * 0.24;
-      const c = Math.cos(a);
-      const s = Math.sin(a);
-      let free = 1;
-      for (const side of [-1, 1]) {
-        const ox = fx - s * half * side;
-        const oy = fy + c * half * side;
-        const hit = g.combat.ray(ox, oy, ox + c * L, oy + s * L, v, null, CAT_STATIC | CAT_BARRIER);
-        if (hit) free = Math.min(free, hit.frac);
-      }
-      // turning far away from the current heading costs a little, pointing away from the target a lot
-      const score = free * 1.2 - Math.abs(k) * 0.07 - Math.abs(angleDiff(v.angle, a)) * 0.05 - (free < 0.3 ? 1 : 0);
-      if (score > bestScore) {
-        bestScore = score;
-        best = a;
-        bestFree = free;
-      }
-    }
-    u.planHeading = best;
-    u.planFree = bestFree;
+    this.driver.checkStuck(u, v, dt);
   }
 
   private chase(u: Unit, tx: number, ty: number, dist: number): void {
@@ -646,131 +565,23 @@ export class PoliceSystem {
       ax += vel.x * lead;
       ay += vel.y * lead;
     }
-    const want = Math.atan2(ay - v.y, ax - v.x);
-    this.plan(u, want, 1 / 60);
-    const err = angleDiff(v.angle, u.planHeading);
-    const steer = clamp(err * 2.4, -1, 1);
-    let throttle = u.planFree < 0.45 ? 0.55 : 1;
-    let brake = 0;
-    let hb = false;
+    this.driver.chaseTo(u, v, ax, ay, 1 / 60);
     const sp = v.speed;
-    if (Math.abs(err) > 1.6 && sp > 6) {
-      throttle = 0.3;
-      hb = true;
-    } else if (Math.abs(err) > 0.9 && sp > 17) {
-      throttle = 0;
-      brake = 0.7;
-    }
     if (!pv && dist < 14) {
-      throttle = 0;
-      brake = v.forwardSpeed > 1 ? 1 : 0;
-      hb = v.forwardSpeed <= 1;
+      v.throttle = 0;
+      v.brake = v.forwardSpeed > 1 ? 1 : 0;
+      v.handbrake = v.forwardSpeed <= 1;
       if (sp < 2.2) this.deploy(u, 'chase');
     } else if (pv && pv.speed < 1.5 && dist < 9) {
-      throttle = 0;
-      brake = v.forwardSpeed > 1 ? 1 : 0;
-      hb = v.forwardSpeed <= 1;
+      v.throttle = 0;
+      v.brake = v.forwardSpeed > 1 ? 1 : 0;
+      v.handbrake = v.forwardSpeed <= 1;
       if (sp < 1.6) this.deploy(u, 'chase');
     }
-    v.steerIn = steer;
-    v.throttle = throttle;
-    v.brake = brake;
-    v.handbrake = hb;
-  }
-
-  private lookAhead(u: Unit, dist: number, out: { x: number; y: number; h: number }): void {
-    const lanes = this.g.city.lanes;
-    let e = lanes[u.edge];
-    let s = u.s + dist;
-    let i = 0;
-    while (s > e.len && i < u.path.length) {
-      s -= e.len;
-      e = lanes[u.path[i++]];
-    }
-    this.g.city.lanePoint(e, Math.min(s, e.len), out);
   }
 
   private route(u: Unit, tx: number, ty: number, dt: number, speedMul: number): void {
-    const g = this.g;
-    const city = g.city;
-    const v = u.v;
-    if (u.edge < 0) {
-      const hit = city.nearestLane(v.x, v.y, 14, v.angle, Math.PI * 0.6, false) ?? city.nearestLane(v.x, v.y, 30, undefined, Math.PI, false);
-      if (!hit) {
-        this.chase(u, tx, ty, Math.hypot(tx - v.x, ty - v.y));
-        return;
-      }
-      u.edge = hit.edge;
-      u.s = hit.s;
-      u.path = [];
-      u.routeT = 0;
-    }
-    let e = city.lanes[u.edge];
-    const proj = projectOnEdge(e, v.x, v.y, u.s);
-    u.s = proj.s;
-    if (proj.dist > 8) {
-      u.lostT += dt;
-      if (u.lostT > 0.8) {
-        u.lostT = 0;
-        u.edge = -1;
-        return;
-      }
-    } else u.lostT = 0;
-    while (u.s >= e.len - 0.3 && u.path.length) {
-      u.s -= e.len;
-      u.edge = u.path.shift()!;
-      e = city.lanes[u.edge];
-    }
-    u.routeT -= dt;
-    if (u.routeT <= 0 || u.path.length === 0) {
-      u.routeT = 2.5;
-      const r = findRoute(city, u.edge, tx, ty, 26, 2500, (id) => g.laneBlocked(id));
-      if (!r || !r.length) {
-        this.chase(u, tx, ty, Math.hypot(tx - v.x, ty - v.y));
-        return;
-      }
-      u.path = r;
-    }
-    const speed = v.speed;
-    const Ld = clamp(5 + speed * 0.6, 6, 26);
-    this.lookAhead(u, Ld, tmp);
-    const dx = tmp.x - v.x;
-    const dy = tmp.y - v.y;
-    const ca = Math.cos(v.angle);
-    const sa = Math.sin(v.angle);
-    const lx = dx * ca + dy * sa;
-    const ly = -dx * sa + dy * ca;
-    const alpha = Math.atan2(ly, Math.max(0.5, lx));
-    const kappa = (2 * Math.sin(alpha)) / Math.max(4, Math.hypot(lx, ly));
-    const delta = Math.atan(kappa * v.def.wheelbase);
-    const steer = clamp(clamp(delta / Math.max(0.05, v.maxSteerAt(speed)), -1, 1) + this.whiskers(v) * 0.6, -1, 1);
-    let target = Math.max(e.speed * 1.55, 16) * speedMul;
-    let distAhead = e.len - u.s;
-    for (let i = 0; i < u.path.length && distAhead < 50; i++) {
-      const ne = city.lanes[u.path[i]];
-      if (ne.turn === Turn.Left || ne.turn === Turn.Right) target = Math.min(target, 11 + distAhead * 0.45);
-      else if (ne.turn === Turn.UTurn) target = Math.min(target, 6 + distAhead * 0.4);
-      distAhead += ne.len;
-    }
-    // brake for cars right in front (police push through, but don't plough into a queue)
-    const range = 6 + speed * 0.8;
-    for (const o of g.vehicles) {
-      if (o === v || o.dead || o === g.player.vehicle) continue;
-      const ox = o.x - v.x;
-      const oy = o.y - v.y;
-      if (Math.abs(ox) > range + 6 || Math.abs(oy) > range + 6) continue;
-      const fx = ox * ca + oy * sa;
-      const fy = -ox * sa + oy * ca;
-      if (fx > 0 && fx < range && Math.abs(fy) < v.def.width / 2 + o.def.width / 2 + 0.3) {
-        const gap = fx - v.def.length / 2 - o.def.length / 2;
-        target = Math.min(target, Math.max(4, gap * 1.6));
-      }
-    }
-    const err = target - v.forwardSpeed;
-    v.throttle = err > 0 ? clamp(err * 0.5 + 0.2, 0, 1) : 0;
-    v.brake = err < -1.5 ? clamp(-err * 0.3, 0, 1) : 0;
-    v.handbrake = false;
-    v.steerIn = steer;
+    if (!this.driver.route(u, u.v, tx, ty, dt, speedMul)) this.chase(u, tx, ty, Math.hypot(tx - u.v.x, ty - u.v.y));
   }
 
   // ------------------------------------------------------------------------------------

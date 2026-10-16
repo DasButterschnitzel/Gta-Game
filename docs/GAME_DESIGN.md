@@ -180,7 +180,9 @@ skid marks, sparks, debris, decals.
 ## 5. Controls (mobile-first, landscape)
 **On foot**: floating stick (left half) · *Angriff* (attack, big) · *Einsteigen* (enter car) · *Sprint* ·
 weapon switch by tapping the weapon icon.
-**In vehicle**: steering on the left (analog drag or ◀ ▶ buttons — setting) · *Gas* (big) · *Bremse /
+**In vehicle**: steering on the left — default **„Richtung“** (point the thumb where the car should go;
+the camera is north-up, so this avoids the classic "left is right when driving down the screen"
+problem of GTA 1/2-style controls), or relative stick / ◀ ▶ buttons (setting) · *Gas* (big) · *Bremse /
 Rückwärts* · *Handbremse* · *Aussteigen* · *Hupe* · *Feuer* (drive-by) · radio button.
 All buttons ≥ 64 dp, semi-transparent, re-positionable later; haptics on crashes and hits.
 Keyboard (testing): WASD/arrows, Space = handbrake, F = enter/exit, J/Ctrl = fire, Q/E = weapons,

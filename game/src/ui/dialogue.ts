@@ -29,6 +29,7 @@ export const NAMES: Record<string, string> = {
   neon: 'NEON-Typ',
   tuersteher: 'Türsteher',
   mehlhorn: 'Mehlhorn',
+  kronwache: 'Kronwache',
 };
 
 export class DialogueUI {
@@ -59,6 +60,7 @@ export class DialogueUI {
         <div class="dlg-face"><img alt=""><div class="dlg-name"></div></div>
         <div class="dlg-bubble"><div class="dlg-text"></div><div class="dlg-more">▼</div></div>
       </div>
+      <div class="dlg-choices"></div>
       <button class="dlg-skip">ÜBERSPRINGEN ⏭</button>`;
     parent.appendChild(this.root);
     this.panel = this.root.querySelector('.dlg-panel') as HTMLElement;
@@ -67,21 +69,71 @@ export class DialogueUI {
     this.textEl = this.root.querySelector('.dlg-text') as HTMLElement;
     this.caption = this.root.querySelector('.dlg-caption') as HTMLElement;
     const skip = this.root.querySelector('.dlg-skip') as HTMLElement;
+    this.skipBtn = skip;
+    this.choicesEl = this.root.querySelector('.dlg-choices') as HTMLElement;
     skip.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
-      this.finish();
+      if (!this.choiceResolve) this.finish();
+    });
+    this.choicesEl.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      const b = (e.target as HTMLElement).closest('button') as HTMLButtonElement | null;
+      if (b && b.dataset.i) this.pick(Number(b.dataset.i));
     });
     this.root.addEventListener('pointerdown', (e) => {
       e.stopPropagation();
-      this.advance();
+      if (!this.choiceResolve) this.advance();
     });
     window.addEventListener('keydown', (e) => {
       if (!this.active) return;
+      if (this.choiceResolve) {
+        const n = e.code === 'Digit1' || e.code === 'Numpad1' ? 0 : e.code === 'Digit2' || e.code === 'Numpad2' ? 1 : e.code === 'Digit3' ? 2 : -1;
+        if (n >= 0 && n < this.choicesEl.children.length) this.pick(n);
+        return;
+      }
       if (e.code === 'Space' || e.code === 'Enter' || e.code === 'KeyF') {
         e.preventDefault();
         this.advance();
       } else if (e.code === 'Escape') this.finish();
     });
+  }
+
+  private skipBtn: HTMLElement;
+  private choicesEl: HTMLElement;
+  private choiceResolve: ((i: number) => void) | null = null;
+
+  /** one line with answer buttons; resolves with the chosen index */
+  choose(line: Line, options: string[]): Promise<number> {
+    this.lines = [line];
+    this.idx = 0;
+    this.active = true;
+    this.root.style.display = 'block';
+    this.show();
+    this.shown = this.full.length;
+    this.textEl.textContent = this.full;
+    this.typing = false;
+    this.skipBtn.style.display = 'none';
+    (this.root.querySelector('.dlg-more') as HTMLElement).style.display = 'none';
+    this.choicesEl.innerHTML = options.map((o, i) => `<button data-i="${i}"><span>${i + 1}</span>${o.replace(/[<>&]/g, '')}</button>`).join('');
+    this.choicesEl.style.display = 'flex';
+    this.root.classList.add('choosing');
+    return new Promise((r) => {
+      this.choiceResolve = r;
+    });
+  }
+
+  private pick(i: number): void {
+    const r = this.choiceResolve;
+    if (!r) return;
+    this.choiceResolve = null;
+    this.choicesEl.style.display = 'none';
+    this.choicesEl.innerHTML = '';
+    this.root.classList.remove('choosing');
+    this.skipBtn.style.display = '';
+    (this.root.querySelector('.dlg-more') as HTMLElement).style.display = '';
+    this.active = false;
+    this.root.style.display = 'none';
+    r(i);
   }
 
   play(lines: Line[]): Promise<void> {

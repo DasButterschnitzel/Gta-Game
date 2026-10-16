@@ -3,16 +3,18 @@
 export interface Settings {
   sfx: number; // 0..1
   music: number; // 0..1
-  steer: 'stick' | 'buttons';
+  steer: 'dir' | 'stick' | 'buttons';
   vibrate: boolean;
   quality: 'low' | 'mid' | 'high';
   fps: boolean;
+  /** settings format: 2 = "Richtung" steering introduced as the default */
+  ver?: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   sfx: 0.9,
   music: 0.7,
-  steer: 'stick',
+  steer: 'dir',
   vibrate: true,
   quality: 'high',
   fps: false,
@@ -53,12 +55,19 @@ export function loadSettings(): Settings {
   const raw = storeGet('settings');
   if (!raw) return { ...DEFAULT_SETTINGS };
   try {
-    return { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<Settings>) };
+    const s = { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<Settings>) };
+    // v0.4: "Richtung" became the default touch steering; move players off the old default once
+    if ((s.ver ?? 1) < 2) {
+      if (s.steer === 'stick') s.steer = 'dir';
+      s.ver = 2;
+    }
+    return s;
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
 }
 
 export function saveSettings(s: Settings): void {
+  s.ver = 2;
   storeSet('settings', JSON.stringify(s));
 }

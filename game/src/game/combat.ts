@@ -392,9 +392,11 @@ export class CombatSystem {
         c.burnT = 0;
         continue;
       }
-      const killed = c.damage(18 * dt, c.burnBy);
+      // Kai burns slower than everybody else (it's a phone game, not a cremation sim)
+      const rate = c === g.player.char ? 9 : 18;
+      const killed = c.damage(rate * dt, c.burnBy);
       if (killed) {
-        g.onCharHit(c, c.burnBy, 18 * dt, true, 'molotov');
+        g.onCharHit(c, c.burnBy, rate * dt, true, 'molotov');
         g.fx.scorch(c.x, c.y, 0.8);
       } else if (c !== g.player.char && c.ai) c.panic = 1;
     }

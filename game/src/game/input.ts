@@ -21,6 +21,8 @@ export interface InputState {
   pausePressed: boolean;
   mapPressed: boolean;
   actionPressed: boolean;
+  /** "Richtung" touch steering: world heading the stick points at (null = not steering) */
+  steerHeading: number | null;
   /** true if the last input came from touch */
   touch: boolean;
 }
@@ -44,6 +46,7 @@ export function emptyInput(): InputState {
     pausePressed: false,
     mapPressed: false,
     actionPressed: false,
+    steerHeading: null,
     touch: false,
   };
 }
@@ -93,7 +96,10 @@ export class Input {
   scripted: Partial<InputState> | null = null;
   private steerSmooth = 0;
   private touchSteer = 0;
+  private dirHeading: number | null = null;
   private extPressed: Partial<InputState> = {};
+  /** touch steering in vehicles: the stick points where the car should go */
+  dirSteer = false;
 
   constructor(target: Window = window) {
     target.addEventListener('keydown', (e) => {
@@ -206,7 +212,25 @@ export class Input {
 
     // ---- touch ----
     const t = this.touch;
-    if (t.stickActive) {
+    if (t.stickActive && this.dirSteer && inVehicle) {
+      s.moveX = t.stickX;
+      s.moveY = t.stickY;
+      // direction steering: the stick angle is the wanted heading (camera is north-up);
+      // near the centre the stick means "straight on"; the angle is lightly smoothed
+      const mag = Math.hypot(t.stickX, t.stickY);
+      if (mag > 0.28) {
+        const a = Math.atan2(t.stickY, t.stickX);
+        if (this.dirHeading === null) this.dirHeading = a;
+        else {
+          let d = a - this.dirHeading;
+          d = Math.atan2(Math.sin(d), Math.cos(d));
+          this.dirHeading += d * Math.min(1, dt * 18);
+        }
+        s.steerHeading = this.dirHeading;
+      } else this.dirHeading = null;
+      this.touchSteer = 0;
+    } else if (t.stickActive) {
+      this.dirHeading = null;
       s.moveX = t.stickX;
       s.moveY = t.stickY;
       // steering: small dead zone, finer near the centre (more so at speed), lightly smoothed
@@ -216,7 +240,10 @@ export class Input {
       const target = Math.sign(sx) * Math.pow(ax, expo);
       this.touchSteer += (target - this.touchSteer) * Math.min(1, dt * 16);
       s.steer = this.touchSteer;
-    } else this.touchSteer += (0 - this.touchSteer) * Math.min(1, dt * 20);
+    } else {
+      this.dirHeading = null;
+      this.touchSteer += (0 - this.touchSteer) * Math.min(1, dt * 20);
+    }
     if (t.steerLeft || t.steerRight) s.steer = (t.steerRight ? 1 : 0) - (t.steerLeft ? 1 : 0);
     if (t.gas) s.throttle = 1;
     if (t.brake) s.brake = 1;

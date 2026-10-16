@@ -193,6 +193,26 @@ export class NpcSystem {
     const ars = c.arsenal;
     const def = ars?.def;
     const ang = Math.atan2(dy, dx);
+    if (def && def.kind === 'throw') {
+      // molotov / grenade throwers keep their distance and lob
+      if (ai.los && dist < 15 && dist > 3.5) {
+        c.setMove(0, 0);
+        c.wantHeading = ang;
+        c.heading = ang;
+        ai.burstT -= dt;
+        if (ars!.cooldown <= 0 && ai.burstT <= 0) {
+          ars!.cooldown = 1.2;
+          ai.burstT = this.rng.range(2.4, 4.0);
+          c.throwAnim();
+          const j = 1.5 + dist * 0.12;
+          g.combat.throwItem(c, def.id as 'molotov' | 'grenade', c.x + Math.cos(ang) * 0.5, c.y + Math.sin(ang) * 0.5, tx + this.rng.range(-j, j), ty + this.rng.range(-j, j), null);
+        }
+        return;
+      }
+      c.wantHeading = null;
+      this.moveTo(c, ai, tx, ty, dt, ai.speed, 9);
+      return;
+    }
     if (def && def.kind === 'gun') {
       if (ai.los && dist < def.range * 0.8 && dist > 1.5) {
         ai.burstT -= dt;

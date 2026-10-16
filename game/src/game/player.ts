@@ -3,6 +3,7 @@ import { Character, WALK_SPEED, RUN_SPEED, SPRINT_SPEED } from './character';
 import type { Vehicle } from './vehicle';
 import type { InputState } from './input';
 import { clamp } from '../core/math';
+import { headingSteer, SmartHandbrake } from './autosteer';
 
 export interface PlayerHost {
   vehicles: Vehicle[];
@@ -23,6 +24,7 @@ export class PlayerController {
   private enterSide = 1;
   private enterT = 0;
   private exitCooldown = 0;
+  private smartHb = new SmartHandbrake();
 
   constructor(
     readonly char: Character,
@@ -177,10 +179,15 @@ export class PlayerController {
   }
 
   private drive(dt: number, inp: InputState, v: Vehicle): void {
-    v.steerIn = clamp(-inp.steer, -1, 1); // input right = negative yaw (clockwise)
+    if (inp.steerHeading !== null) {
+      // "Richtung": steer towards where the stick points; with BREMSE held near standstill the
+      // stick means "back up in this direction"
+      const reverse = v.forwardSpeed < -0.8 || (inp.brake > 0.5 && inp.throttle < 0.1 && v.forwardSpeed < 0.6);
+      v.steerIn = headingSteer(v, inp.steerHeading, reverse);
+    } else v.steerIn = clamp(-inp.steer, -1, 1); // input right = negative yaw (clockwise)
     v.throttle = inp.throttle;
     v.brake = inp.brake;
-    v.handbrake = inp.handbrake;
+    v.handbrake = inp.steerHeading !== null ? this.smartHb.apply(v, inp.steerHeading, inp.handbrake) : inp.handbrake;
     v.horn = inp.horn;
     if (inp.weaponNext) this.char.arsenal?.cycle(1);
     if (inp.weaponPrev) this.char.arsenal?.cycle(-1);

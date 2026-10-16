@@ -147,7 +147,7 @@ export class PedSystem {
   alarm(x: number, y: number, radius: number, severity: number): void {
     for (const c of this.peds) {
       const ai = c.ai as PedAI;
-      if (!ai || c.dead) continue;
+      if (!ai || ai.kind !== 'ped' || c.dead) continue;
       const d = Math.hypot(c.x - x, c.y - y);
       if (d > radius) continue;
       ai.mode = 'flee';
@@ -160,6 +160,11 @@ export class PedSystem {
 
   step(dt: number): void {
     const city = this.w.city;
+    // somebody else (missions, gangs) took a pedestrian over: not ours any more
+    for (let i = this.peds.length - 1; i >= 0; i--) {
+      const ai = this.peds[i].ai as { kind?: string } | null;
+      if (ai && ai.kind !== 'ped') this.peds.splice(i, 1);
+    }
     for (const c of this.peds) {
       const ai = c.ai as PedAI;
       if (!ai || c.hidden) continue;

@@ -12,6 +12,8 @@ export interface Blip {
   angle?: number;
   /** letter for contact blips */
   label?: string;
+  /** only shown while inside the radar (not pinned to its edge) */
+  near?: boolean;
 }
 
 function buildMinimap(city: City): HTMLCanvasElement {
@@ -119,7 +121,8 @@ export class HUD {
         <div class="bar armor"><div></div></div>
         <div class="weapon">Fäuste</div>
       </div>
-      <div class="stats"><div class="money">0 €</div><div class="wanted">${'<i></i>'.repeat(6)}</div></div>
+      <div class="stats"><div class="money">0 €</div><div class="wanted">${'<i></i>'.repeat(6)}</div><div class="bag"></div></div>
+      <div class="phone"><b></b><span></span></div>
       <div class="topbtns"><div class="ubtn radio" style="display:none">♫</div><div class="ubtn pause">II</div></div>
       <div class="banner"></div>
       <div class="vbanner"></div>
@@ -162,6 +165,29 @@ export class HUD {
     this.elArrow = this.root.querySelector('.tarrow') as HTMLElement;
     this.elTitle = this.root.querySelector('.titlecard') as HTMLElement;
     this.elFade = this.root.querySelector('.fadeov') as HTMLElement;
+    this.elBag = this.root.querySelector('.bag') as HTMLElement;
+    this.elPhone = this.root.querySelector('.phone') as HTMLElement;
+  }
+
+  private elBag: HTMLElement;
+  private elPhone: HTMLElement;
+  private lastBag = '';
+  private phoneT = 0;
+
+  /** carried goods line under the money ("" hides it) */
+  bag(text: string): void {
+    if (text === this.lastBag) return;
+    this.lastBag = text;
+    this.elBag.textContent = text;
+    this.elBag.style.display = text ? 'block' : 'none';
+  }
+
+  /** phone notification (dealer tips, calls) */
+  phone(from: string, text: string, secs = 7): void {
+    (this.elPhone.firstElementChild as HTMLElement).textContent = `📱 ${from}`;
+    (this.elPhone.lastElementChild as HTMLElement).textContent = text;
+    this.elPhone.classList.add('show');
+    this.phoneT = secs;
   }
 
   /** mission objective line (empty hides it) and timer (seconds or null) */
@@ -198,8 +224,14 @@ export class HUD {
     const cy = H / 2;
     const dx = sx - cx;
     const dy = sy - cy;
-    const m = 34;
-    const k = Math.min((W / 2 - m) / Math.max(1e-3, Math.abs(dx)), (H / 2 - m) / Math.max(1e-3, Math.abs(dy)));
+    // stay inside a frame that keeps clear of the banner (top) and objective / speedometer (bottom)
+    const mL = 64;
+    const mR = 64;
+    const mT = 78;
+    const mB = Math.min(130, H * 0.3);
+    const kx = dx > 0 ? (W - mR - cx) / dx : dx < 0 ? (mL - cx) / dx : Infinity;
+    const ky = dy > 0 ? (H - mB - cy) / dy : dy < 0 ? (mT - cy) / dy : Infinity;
+    const k = Math.max(0, Math.min(kx, ky));
     const x = cx + dx * k;
     const y = cy + dy * k;
     this.elArrow.style.display = 'block';
@@ -306,6 +338,7 @@ export class HUD {
     if (this.vbannerT > 0 && (this.vbannerT -= dt) <= 0) this.elVBanner.classList.remove('show');
     if (this.centerT > 0 && (this.centerT -= dt) <= 0) this.elCenter.classList.remove('show');
     if (this.hintT > 0 && (this.hintT -= dt) <= 0) this.elHint.classList.remove('show');
+    if (this.phoneT > 0 && (this.phoneT -= dt) <= 0) this.elPhone.classList.remove('show');
     if (this.ptextT > 0 && (this.ptextT -= dt) <= 0) this.elPText.classList.remove('show');
     if (this.radioT > 0 && (this.radioT -= dt) <= 0) this.elRadio.classList.remove('show');
     if (this.titleT > 0 && (this.titleT -= dt) <= 0) this.elTitle.classList.remove('show');
@@ -402,6 +435,7 @@ export class HUD {
       let dy = -(b.y - py) * scale;
       const d = Math.hypot(dx, dy);
       const edge = R - 7;
+      if (b.near && d > edge) continue;
       const clampEdge = d > edge;
       if (clampEdge) {
         dx = (dx / d) * edge;

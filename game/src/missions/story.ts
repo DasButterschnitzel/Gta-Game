@@ -1,86 +1,11 @@
-// Story missions: prologue "A 26" and Act 1 "Entlassung" (missions 1–5 so far).
-import type { MissionDef, MissionCtx } from './runner';
-import type { CharLook } from '../render/charSprites';
-import type { Character } from '../game/character';
-import type { Vehicle } from '../game/vehicle';
+// Story missions: prologue "A 26" and Act 1 "Entlassung" (missions 1–5; 6–10 in act1b.ts).
+import type { MissionDef } from './runner';
 import { RNG } from '../core/rng';
 import { D } from '../world/types';
 import { GANGS } from '../game/gangs';
 import { lanePoint, sidewalkNear, shopFronts, playgroundNear, parkingNear, canalBridge, type Spot } from './places';
-
-/** sprite palettes for the story cast (match the comic portraits) */
-export const CAST: Record<string, CharLook> = {
-  dende: { skin: 0xeac2a0, hair: 0xc8302a, top: 0x3a7a3a, bottom: 0x2e3a5a, shoes: 0xe8e8e8, accent: 0xe8c040 },
-  gul: { skin: 0xc89070, hair: 0x2a1a14, top: 0xf2f2ea, bottom: 0x6a2a3a, shoes: 0x1a1a1a, accent: 0xc83a2a },
-  herbie: { skin: 0xe8bca0, hair: 0x5a4a3a, top: 0x7a5a3a, bottom: 0x4a4a52, shoes: 0x3a2a1e, accent: 0xd8d0c0 },
-  uschi: { skin: 0xe8b898, hair: 0xe8d090, top: 0xd8a820, bottom: 0xd8a820, shoes: 0xe8e8e8, accent: 0xc82a2a },
-  wirt: { skin: 0xeab898, hair: 0x8a6a4a, top: 0xe8e8e8, bottom: 0x3a3a3a, shoes: 0x3a2a1e, accent: 0x8a6a4a },
-  tuersteher: { skin: 0x9a6444, hair: 0x1a1a1a, top: 0x151515, bottom: 0x151515, shoes: 0x0e0e0e, accent: 0xe8c040 },
-  mehlhorn: { skin: 0xf0c0a0, hair: 0xd8c8a0, top: 0x8a2a2a, bottom: 0x2a2a2e, shoes: 0x3a2a1e, accent: 0xe8c040 },
-  thug: { skin: 0xd8a07a, hair: 0x2a2a2a, top: 0x3a3a3e, bottom: 0x2a2a2e, shoes: 0x1a1a1a, accent: 0x8a8a8a },
-  mikki: { skin: 0xf2cdb0, hair: 0x6a4a2a, top: 0x3a3a5a, bottom: 0x2a2a2e, shoes: 0xe8e8e8, accent: 0x5a5a8a },
-};
-
-function poi(m: MissionCtx, id: string): Spot {
-  const p = m.g.city.pois.get(id);
-  if (!p) throw new Error(`missing POI ${id}`);
-  return { x: p.x, y: p.y };
-}
-
-function near(m: MissionCtx, r: number, x: number, y: number): boolean {
-  return Math.hypot(m.g.player.x - x, m.g.player.y - y) < r;
-}
-
-/** make sure the player sits in a car; returns it */
-async function needCar(m: MissionCtx, text = 'Besorg dir ein Auto'): Promise<Vehicle> {
-  if (m.g.player.vehicle) return m.g.player.vehicle;
-  m.objective(text);
-  await m.until(() => !!m.g.player.vehicle);
-  return m.g.player.vehicle!;
-}
-
-function thugs(m: MissionCtx, look: () => CharLook, at: Spot, n: number, weapons: (string | null)[], opts: { health?: number; accuracy?: number; fleeAt?: number; gang?: number } = {}): Character[] {
-  const list: Character[] = [];
-  for (let i = 0; i < n; i++) {
-    const a = (i / n) * Math.PI * 2;
-    const x = at.x + Math.cos(a) * 2.2;
-    const y = at.y + Math.sin(a) * 2.2;
-    const c = m.char(look(), x, y, 'gang');
-    m.g.npcs.add(c, {
-      mode: 'attack',
-      target: m.g.player.char,
-      weapon: (weapons[i % weapons.length] as never) ?? null,
-      health: opts.health,
-      accuracy: opts.accuracy ?? 0.45,
-      fleeAt: opts.fleeAt ?? 0.25,
-      gang: opts.gang ?? -1,
-    });
-    list.push(c);
-  }
-  return list;
-}
-
-/** targets: red arrows over each enemy that is still in the fight */
-async function defeat(m: MissionCtx, list: Character[], text: string): Promise<void> {
-  m.objective(text);
-  const targets = list.map((c) =>
-    m.target({ x: () => c.x, y: () => c.y, kind: 'arrow', color: 'red', z: 1.6, gps: false }),
-  );
-  const out = (c: Character): boolean => c.dead || !m.g.chars.includes(c) || (c.ai as { mode?: string } | null)?.mode === 'flee';
-  try {
-    while (!list.every(out)) {
-      await m.until(() => list.some((c, i) => out(c) && targets[i].blip) || list.every(out));
-      list.forEach((c, i) => {
-        if (out(c) && targets[i].blip) {
-          targets[i].blip = false;
-          m.untarget(targets[i]);
-        }
-      });
-    }
-  } finally {
-    for (const t of targets) m.untarget(t);
-  }
-}
+import { CAST, poi, near, needCar, thugs, defeat } from './common';
+import { ACT1B } from './act1b';
 
 // =============================================================================================
 // Prologue
@@ -113,7 +38,7 @@ export const PROLOGUE: MissionDef = {
       { who: 'jansen', text: 'Runter zum Hafenkanal. Herbie sagt, auf der anderen Seite wartet der Container.' },
     ]);
     g.wanted.atLeast(4, car.x, car.y);
-    g.hud.hint(g.isTouch ? 'Links lenken · GAS / BREMSE · HANDBREMSE = Drift' : 'W/S = Gas/Bremse · A/D = Lenken · Leertaste = Handbremse', 5);
+    g.hud.hint(g.isTouch ? g.touchDriveHint() : 'W/S = Gas/Bremse · A/D = Lenken · Leertaste = Handbremse', 5);
     const bridge = canalBridge(city, car.x, car.y);
     m.objective('Häng die Polizei ab – runter zum Hafenkanal!');
     const t = m.target({ x: () => bridge.x, y: () => bridge.y, r: 9, color: 'red', gps: true });
@@ -429,7 +354,7 @@ const faustSanktPaula: MissionDef = {
   },
 };
 
-export const ACT1: MissionDef[] = [freigang, altesRevier, onkelHerbie, abschleppdienst, faustSanktPaula];
+export const ACT1: MissionDef[] = [freigang, altesRevier, onkelHerbie, abschleppdienst, faustSanktPaula, ...ACT1B];
 
 /** the whole story in order */
 export const STORY: MissionDef[] = [PROLOGUE, ...ACT1];

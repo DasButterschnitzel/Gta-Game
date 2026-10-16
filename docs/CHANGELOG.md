@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.4.0 — Act 1 complete, dealing, gang war
+**New**
+- **Act 1 is complete (missions 6–10)**:
+  - *Ticken*: Dende teaches you to deal.
+  - *Turbine*: rush a pill van to Lenny's club against the clock, with Kiez-Kompanie cars ramming you
+    and shooting out of their windows.
+  - *Rotlicht, Blaulicht*: a traffic stop by KHK Ruhland, a planted gun, and a police evidence van
+    you have to stop.
+  - *Kiezkrieg*: plant pills, start a gang war, then **choose a side**.
+  - *Schwesterherz*: Lena calls after six years. The meeting is a Kronwache ambush, the canal bridges
+    come down, and you escape into the harbour. **Freihafen & Rostwerk are now open.**
+- **Dealing („Ticken“)**:
+  - 5 goods (Gras, Pillen, Ket, Crystal, Koks).
+  - 8 dealers with their own prices: 4 in the south now, 2 in the harbour, 2 for later.
+  - Prices react to what you buy and sell, and drift day by day.
+  - Dealers text you tips („zahlt das Doppelte“, „spottbillig“).
+  - Some dealers are undercover cops.
+  - If you're busted or killed, the goods are gone.
+- **Kalle's Kleinkaliber**: the arms dealer in the allotments (purple K on the radar). Weapons, ammo,
+  armour and bigger bags for goods. More stock unlocks as the story goes on.
+- **Gangs on the streets**:
+  - Gang members hang out in their turf.
+  - Low respect = they attack you on sight. High respect = they leave you alone.
+  - Since *Kiezkrieg*, Kiez-Kompanie and NEON fight each other in the streets.
+  - New **Status page** in the pause menu: respect bars, story progress, dealing stats.
+- **New steering option „Richtung“ (now the default for touch)**: point the left thumb where you want
+  the car to go – up = north on screen. The car steers there by itself. Hold BREMSE and point
+  backwards to reverse. The old modes are still in Pause → Einstellungen → Lenkung („Stick“ = old
+  steering wheel style, „◀ ▶“ = buttons).
+- **Hostile cars**: gang cars and the Kronwache's black SUVs ram you, shoot out of their windows and
+  jump out when you're on foot. You can ram them off the road.
+- **Visible bridge barriers**: the raised bascule bridges and the closed Lauter bridges are now shown
+  (barriers, warning lights, raised bridge decks) instead of being invisible walls.
+- Phone messages and calls, dialogue choices, a bag counter for carried goods.
+
+**Fixed / improved**
+- The radar now shows mission contacts, targets and the safehouse. Before, they only appeared on the
+  big map.
+- The GPS route and the AI drivers no longer send you around the block when the target is in the
+  middle of a street.
+- Molotov fire hurts you less (still a bad idea to stand in it).
+
 ## v0.3.0 — the story begins
 **New**
 - **Prologue „A 26"**: six years earlier, a rainy night, a getaway in a black B5 with four stars on

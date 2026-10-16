@@ -49,6 +49,7 @@ export const FACES: Record<string, Face> = {
   neon: { skin: '#f0d0b8', hair: '#2ad85a', style: 'buzz', brows: 'angry', mouth: 'smirk', eyes: 'narrow', shirt: '#101010', collar: 'hoodie', accent: '#2ad85a', bg: '#103a1a', jaw: 'narrow' },
   tuersteher: { skin: '#9a6444', hair: '#1a1a1a', style: 'bald', beard: 'full', beardColor: '#1a1a1a', brows: 'angry', mouth: 'frown', eyes: 'narrow', shirt: '#151515', collar: 'tshirt', bg: '#5a1a1a', jaw: 'square', chain: true },
   mehlhorn: { skin: '#f0c0a0', hair: '#d8c8a0', style: 'slick', beard: 'moustache', beardColor: '#c8b890', brows: 'raised', mouth: 'grin', eyes: 'calm', shirt: '#8a2a2a', collar: 'suit', accent: '#e8c040', bg: '#c8a040', age: 0.5, chain: true, jaw: 'round' },
+  kronwache: { skin: '#e0b090', hair: '#2a2a2a', style: 'buzz', glasses: 'shades', brows: 'flat', mouth: 'flat', eyes: 'narrow', shirt: '#121316', collar: 'suit', accent: '#d8d8d8', bg: '#3a3424', jaw: 'square' },
 };
 
 const cache = new Map<string, string>();

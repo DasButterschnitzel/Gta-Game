@@ -434,6 +434,34 @@ export function vehicleLivery(def: VehicleDef): THREE.Texture | null {
       text('TAXI 2 22 22', fx(0.5), side.y + 30, 16, '#1a1a1a');
       break;
     }
+    case 'kronwache': {
+      // private security: gloss black, thin gold pinstripe, crown on the bonnet
+      ctx.fillStyle = '#b8962e';
+      ctx.fillRect(0, side.y + 24, W, 2);
+      text('KRONWACHE', fx(0.5), side.y + 36, 11, '#8a7438');
+      text('♛', fx(0.88), 32, 20, '#b8962e', -Math.PI / 2);
+      // roof rails
+      ctx.fillStyle = '#8a9098';
+      ctx.fillRect(fx(0.12), 11, fx(0.44), 3);
+      ctx.fillRect(fx(0.12), 50, fx(0.44), 3);
+      break;
+    }
+    case 'beweis': {
+      // police transporter: blue/neon side band, bonnet "POLIZEI", roof number
+      ctx.fillStyle = '#1f3c8c';
+      ctx.fillRect(fx(0.8), top.y, fx(0.2), top.h);
+      text('POLIZEI', fx(0.9), 32, 12, '#ffffff', -Math.PI / 2);
+      text('NH 1-40', fx(0.4), 32, 18, '#10141c', -Math.PI / 2);
+      ctx.fillStyle = '#d8f01a';
+      ctx.fillRect(0, 2, W, 3);
+      ctx.fillRect(0, 59, W, 3);
+      ctx.fillStyle = '#1f3c8c';
+      ctx.fillRect(0, side.y + 28, W, 22);
+      ctx.fillStyle = '#d8f01a';
+      ctx.fillRect(0, side.y + 24, W, 4);
+      text('POLIZEI', fx(0.5), side.y + 39, 16, '#ffffff');
+      break;
+    }
     case 'bse': {
       // federal special unit: matt olive, armour plates, yellow unit code
       ctx.fillStyle = 'rgba(0,0,0,0.25)';

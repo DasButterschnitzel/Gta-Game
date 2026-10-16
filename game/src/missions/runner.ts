@@ -4,11 +4,12 @@
 import type { Game } from '../game/game';
 import type { Vehicle } from '../game/vehicle';
 import type { Character, Role } from '../game/character';
-import type { Line } from '../ui/dialogue';
+import { NAMES, type Line } from '../ui/dialogue';
 import type { Marker, MarkerColor } from '../render/markers';
 import type { Blip } from '../ui/hud';
 import type { CharLook } from '../render/charSprites';
 import { findRoute } from '../world/route';
+import type { Chaser, ChaserOptions } from '../game/chasers';
 
 export class MissionAbort extends Error {
   constructor(readonly reason: string) {
@@ -64,7 +65,7 @@ export class MissionRunner {
   private fails: { pred: () => boolean; reason: string }[] = [];
   readonly targets: Target[] = [];
   objective = '';
-  timer: { left: number; label: string } | null = null;
+  timer: { left: number; label: string; fail: boolean } | null = null;
   gps: { x: number; y: number }[] = [];
   private gpsT = 0;
   private spawnedV: Vehicle[] = [];
@@ -148,9 +149,12 @@ export class MissionRunner {
     if (this.timer) {
       this.timer.left -= dt;
       if (this.timer.left <= 0) {
+        const fail = this.timer.fail;
         this.timer = null;
-        this.abort('Die Zeit ist abgelaufen.');
-        return;
+        if (fail) {
+          this.abort('Die Zeit ist abgelaufen.');
+          return;
+        }
       }
     }
     for (let i = this.waits.length - 1; i >= 0; i--) {
@@ -250,6 +254,8 @@ export class MissionRunner {
 
   cleanup(): void {
     const g = this.g;
+    g.chasers.forget(this.spawnedV);
+    g.trade.allowInMission = false;
     this.waits.length = 0;
     this.fails.length = 0;
     this.targets.length = 0;
@@ -300,6 +306,20 @@ export class MissionCtx {
     return this.r.until(pred);
   }
 
+  /** a line with answer buttons; resolves with the index of the answer */
+  choose(line: Line, options: string[]): Promise<number> {
+    return this.g.playChoice(line, options);
+  }
+
+  /** a phone call: ring, then the dialogue */
+  async call(lines: Line[]): Promise<void> {
+    this.g.sound.play('ring', undefined, undefined, 0.8);
+    const caller = lines.find((l) => l.who !== 'kai' && l.who !== 'caption');
+    this.g.hud.phone(caller ? (caller.name ?? NAMES[caller.who] ?? caller.who) : 'Unbekannt', 'ruft an …', 1.6);
+    await this.wait(1.3);
+    await this.say(lines);
+  }
+
   wait(seconds: number): Promise<void> {
     const end = this.r.time + seconds;
     return this.r.until(() => this.r.time >= end);
@@ -319,8 +339,9 @@ export class MissionCtx {
     throw new MissionAbort(reason);
   }
 
-  timer(seconds: number, label = ''): { stop(): void; left(): number } {
-    this.r.timer = { left: seconds, label };
+  /** countdown on the HUD; runs out = mission failed (unless fail is false) */
+  timer(seconds: number, label = '', fail = true): { stop(): void; left(): number } {
+    this.r.timer = { left: seconds, label, fail };
     const t = this.r.timer;
     return {
       stop: () => {
@@ -339,7 +360,7 @@ export class MissionCtx {
   }
 
   /** go to a point (on foot or by car). `stop` = must be slow when arriving in a vehicle */
-  async goTo(x: number, y: number, text: string, opts: { r?: number; vehicle?: boolean | Vehicle; stop?: boolean; color?: MarkerColor; gps?: boolean } = {}): Promise<void> {
+  async goTo(x: number, y: number, text: string, opts: { r?: number; vehicle?: boolean | Vehicle; stop?: boolean; color?: MarkerColor; gps?: boolean; foot?: boolean } = {}): Promise<void> {
     const r = opts.r ?? 4;
     this.objective(text);
     const t = this.target({ x: () => x, y: () => y, r, color: opts.color ?? 'yellow', kind: 'ring', gps: opts.gps ?? true });
@@ -349,6 +370,7 @@ export class MissionCtx {
         const pl = g.player;
         if (Math.hypot(pl.x - x, pl.y - y) > r) return false;
         if (opts.vehicle === true && !pl.vehicle) return false;
+        if (opts.foot && pl.vehicle) return false;
         if (opts.vehicle && opts.vehicle !== true && pl.vehicle !== opts.vehicle) return false;
         if (opts.stop && pl.vehicle && pl.vehicle.speed > 3) return false;
         return true;
@@ -396,6 +418,15 @@ export class MissionCtx {
 
   keep(v: Vehicle): void {
     this.r.keep(v);
+  }
+
+  /** a car with a crew that hunts / follows / drives somewhere (see ChaserSystem) */
+  chaser(defId: string, x: number, y: number, angle: number, opts: ChaserOptions): Chaser {
+    const ch = this.g.chasers.spawn(defId, x, y, angle, opts);
+    ch.v.missionTag = 'mission';
+    this.r.track(ch.v, null);
+    for (const c of ch.crew) this.r.track(null, c);
+    return ch;
   }
 
   /** big title card */

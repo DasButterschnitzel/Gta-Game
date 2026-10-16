@@ -62,6 +62,24 @@ export function findRoute(city: City, from: number, tx: number, ty: number, goal
   const endX = (id: number): number => lanes[id].xs[lanes[id].xs.length - 1];
   const endY = (id: number): number => lanes[id].ys[lanes[id].ys.length - 1];
   const h = (id: number): number => Math.hypot(endX(id) - tx, endY(id) - ty);
+  // the goal is reached by any lane that passes the target, not only one that ends there
+  // (targets in the middle of a long block would otherwise send everybody around the block)
+  const passR = goalR * 0.5;
+  const passes = (id: number): boolean => {
+    const e = lanes[id];
+    const xs = e.xs;
+    const ys = e.ys;
+    for (let i = 0; i + 1 < xs.length; i++) {
+      const ax = xs[i];
+      const ay = ys[i];
+      const dx = xs[i + 1] - ax;
+      const dy = ys[i + 1] - ay;
+      const l2 = dx * dx + dy * dy || 1;
+      const t = Math.max(0, Math.min(1, ((tx - ax) * dx + (ty - ay) * dy) / l2));
+      if (Math.hypot(ax + dx * t - tx, ay + dy * t - ty) < passR) return true;
+    }
+    return false;
+  };
   g.set(from, 0);
   open.push(h(from), from);
   let expanded = 0;
@@ -75,7 +93,7 @@ export function findRoute(city: City, from: number, tx: number, ty: number, goal
       bestH = hc;
       best = cur;
     }
-    if (hc < goalR && cur !== from) return unwind(parent, from, cur);
+    if (cur !== from && (hc < goalR || passes(cur))) return unwind(parent, from, cur);
     const gc = g.get(cur)!;
     for (const nx of lanes[cur].next) {
       if (blocked && (blocked(nx) || (lanes[nx].road < 0 && lanes[nx].next.length > 0 && lanes[nx].next.every((n) => blocked(n))))) continue;

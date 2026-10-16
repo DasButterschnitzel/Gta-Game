@@ -15,8 +15,8 @@ export interface LaneSpot extends Spot {
 }
 
 /** nearest point on a driving lane (with heading) */
-export function lanePoint(city: City, x: number, y: number, r = 60): LaneSpot | null {
-  const hit = city.nearestLane(x, y, r, undefined, Math.PI, true);
+export function lanePoint(city: City, x: number, y: number, r = 60, heading?: number): LaneSpot | null {
+  const hit = (heading !== undefined ? city.nearestLane(x, y, r, heading, Math.PI * 0.35, true) : null) ?? city.nearestLane(x, y, r, undefined, Math.PI, true);
   if (!hit) return null;
   const e = city.lanes[hit.edge];
   const out = { x: 0, y: 0, h: 0 };
@@ -124,4 +124,64 @@ export function canalBridge(city: City, x: number, y: number): Spot {
     }
   }
   return best;
+}
+
+/**
+ * A lane point between rMin and rMax from (x, y), heading along the lane. `ok` can reject spots
+ * (visible on screen, wrong direction …); `dir` biases the search towards a direction.
+ */
+export function laneSpotAround(city: City, x: number, y: number, rMin: number, rMax: number, rng: RNG, ok?: (s: LaneSpot) => boolean, dir?: number): LaneSpot | null {
+  for (let i = 0; i < 80; i++) {
+    const a = dir !== undefined && i < 50 ? dir + rng.range(-0.9, 0.9) : rng.range(0, Math.PI * 2);
+    const r = rng.range(rMin, rMax);
+    const sp = lanePoint(city, x + Math.cos(a) * r, y + Math.sin(a) * r, 25);
+    if (!sp) continue;
+    const d = Math.hypot(sp.x - x, sp.y - y);
+    if (d < rMin * 0.8 || d > rMax * 1.25) continue;
+    if (city.zoneAt(sp.x, sp.y) !== city.zoneAt(x, y)) continue;
+    if (ok && !ok(sp)) continue;
+    return sp;
+  }
+  return null;
+}
+
+/** heading of a lane spot points roughly towards (x, y) */
+export function facing(sp: LaneSpot, x: number, y: number, tol = 1.7): boolean {
+  const a = Math.atan2(y - sp.y, x - sp.x) - sp.h;
+  return Math.abs(Math.atan2(Math.sin(a), Math.cos(a))) < tol;
+}
+
+/** nearest walkable, non-road tile centre to (x, y) within maxR metres */
+export function walkableNear(city: City, x: number, y: number, maxR: number, allowRoad = false): Spot | null {
+  const tx0 = Math.floor(x / TILE);
+  const ty0 = Math.floor(y / TILE);
+  const R = Math.ceil(maxR / TILE);
+  for (let r = 0; r <= R; r++) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue;
+        const tx = tx0 + dx;
+        const ty = ty0 + dy;
+        if (!city.inBounds(tx, ty) || !city.isWalkableTile(tx, ty)) continue;
+        if (!allowRoad && city.flags[ty * MAP_W + tx] & F_ROAD) continue;
+        return { x: (tx + 0.5) * TILE, y: (ty + 0.5) * TILE };
+      }
+    }
+  }
+  return null;
+}
+
+/** a walkable spot of a district (any zone) between rMin and rMax from (x, y) */
+export function districtSpot(city: City, district: D, x: number, y: number, rMin: number, rMax: number, rng: RNG): Spot | null {
+  for (let i = 0; i < 800; i++) {
+    const a = rng.range(0, Math.PI * 2);
+    const r = rng.range(rMin, rMax);
+    const tx = Math.floor((x + Math.cos(a) * r) / TILE);
+    const ty = Math.floor((y + Math.sin(a) * r) / TILE);
+    if (!city.inBounds(tx, ty)) continue;
+    const idx = ty * MAP_W + tx;
+    if (city.district[idx] !== district || !city.isWalkableTile(tx, ty)) continue;
+    return { x: (tx + 0.5) * TILE, y: (ty + 0.5) * TILE };
+  }
+  return null;
 }

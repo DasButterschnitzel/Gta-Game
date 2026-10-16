@@ -15,6 +15,9 @@ export interface SaveData {
   zones: number[];
   stats: Record<string, number>;
   savedAt: number;
+  /** v0.4 */
+  dealing?: { carry: Record<string, number>; capacity: number; unlocked: boolean; profit: number; deals: number };
+  flags?: string[];
 }
 
 const KEY = 'save1';

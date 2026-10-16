@@ -573,6 +573,38 @@ def main():
     write('takedown', sting([523.3, 659.3, 784.0, 1046.5], 0.06, 0.35, bass=65.4))
     write('busted', sting([392.0, 311.1, 261.6, 196.0], 0.16, 0.6, bass=49.0, wave='square'))
     write('static', static_burst())
+    # v0.4: phone
+    write('sms', phone_beeps())
+    write('ring', phone_ring())
+
+
+def phone_beeps():
+    # short two-tone text message alert (original)
+    out = []
+    for f, d in [(1568.0, 0.07), (0, 0.04), (2093.0, 0.09)]:
+        n = int(d * SR)
+        t = np.arange(n) / SR
+        if f == 0:
+            out.append(np.zeros(n))
+            continue
+        tone = np.sign(np.sin(2 * np.pi * f * t)) * 0.35 + np.sin(2 * np.pi * f * t) * 0.65
+        out.append(filt(sos_lp(5000), tone) * np.minimum(1, t / 0.004) * np.exp(-t / (d * 2.5)))
+    return fade(norm(np.concatenate(out + [np.zeros(int(0.08 * SR))]), 0.6), 0.001, 0.03)
+
+
+def phone_ring():
+    # old-school handset ring: two bursts of a warbling double tone
+    seg = []
+    for burst in range(2):
+        n = int(0.42 * SR)
+        t = np.arange(n) / SR
+        warble = (np.sin(2 * np.pi * 20 * t) > 0).astype(np.float64)
+        f = np.where(warble > 0, 1320.0, 1660.0)
+        x = np.sin(2 * np.pi * np.cumsum(f) / SR) * 0.7 + np.sin(2 * np.pi * np.cumsum(f * 2) / SR) * 0.15
+        x *= np.minimum(1, t / 0.01) * np.minimum(1, (0.42 - t) / 0.02)
+        seg.append(filt(sos_bp(500, 6000), x))
+        seg.append(np.zeros(int(0.18 * SR)))
+    return fade(norm(np.concatenate(seg), 0.55), 0.001, 0.05)
 
 
 if __name__ == '__main__':
