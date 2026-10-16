@@ -24,7 +24,7 @@ async function boot(): Promise<void> {
   }
   // Android shell hooks
   const w = window as unknown as Record<string, unknown>;
-  w.__hgBack = (): void => game.togglePause();
+  w.__hgBack = (): void => game.back();
   w.__hgPause = (): void => {
     game.setPaused(true);
     game.audio.suspend();

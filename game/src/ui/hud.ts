@@ -63,8 +63,11 @@ function buildMinimap(city: City): HTMLCanvasElement {
 export class HUD {
   readonly root: HTMLElement;
   private radar: HTMLCanvasElement;
+  get radarEl(): HTMLCanvasElement {
+    return this.radar;
+  }
   private rctx: CanvasRenderingContext2D;
-  private minimap: HTMLCanvasElement;
+  readonly minimap: HTMLCanvasElement;
   private elMoney: HTMLElement;
   private elWanted: HTMLElement;
   private elHp: HTMLElement;
@@ -83,6 +86,8 @@ export class HUD {
   private hurtA = 0;
   private elPText: HTMLElement;
   private ptextT = 0;
+  private elRadio: HTMLElement;
+  private radioT = 0;
   private last = { money: -1, wanted: -1, hp: -1, armor: -1, speed: -1, weapon: '' };
   private bannerT = 0;
   private vbannerT = 0;
@@ -107,6 +112,7 @@ export class HUD {
       <div class="banner"></div>
       <div class="vbanner"></div>
       <div class="ptext"></div>
+      <div class="rbanner"></div>
       <div class="speedo" style="display:none"></div>
       <div class="center-msg"></div>
       <div class="hint"></div>
@@ -133,6 +139,18 @@ export class HUD {
     this.btnWeapon = this.elWeapon;
     this.elHurt = this.root.querySelector('.hurt') as HTMLElement;
     this.elPText = this.root.querySelector('.ptext') as HTMLElement;
+    this.elRadio = this.root.querySelector('.rbanner') as HTMLElement;
+  }
+
+  /** radio station banner; `delay` lets the vehicle name show first */
+  radioName(name: string, tagline: string, delay = 0): void {
+    const show = (): void => {
+      this.elRadio.innerHTML = `<b>♫ ${name}</b>${tagline ? `<small>${tagline}</small>` : ''}`;
+      this.elRadio.classList.add('show');
+      this.radioT = 2.6;
+    };
+    if (delay > 0) setTimeout(show, delay * 1000);
+    else show();
   }
 
   /** GTA 2 style red pickup text */
@@ -143,6 +161,10 @@ export class HUD {
     void this.elPText.offsetWidth;
     this.elPText.classList.add('show');
     this.ptextT = 1.6;
+  }
+
+  showFps(on: boolean): void {
+    this.elFps.style.display = on ? 'block' : 'none';
   }
 
   /** red screen-edge flash when the player takes damage (0..1) */
@@ -205,6 +227,7 @@ export class HUD {
     if (this.centerT > 0 && (this.centerT -= dt) <= 0) this.elCenter.classList.remove('show');
     if (this.hintT > 0 && (this.hintT -= dt) <= 0) this.elHint.classList.remove('show');
     if (this.ptextT > 0 && (this.ptextT -= dt) <= 0) this.elPText.classList.remove('show');
+    if (this.radioT > 0 && (this.radioT -= dt) <= 0) this.elRadio.classList.remove('show');
     if (this.hurtA > 0) {
       this.hurtA = Math.max(0, this.hurtA - dt * 1.6);
       this.elHurt.style.opacity = this.hurtA.toFixed(3);

@@ -110,6 +110,10 @@ export class Input {
     this.lastWasTouch = true;
   }
 
+  get lastTouch(): boolean {
+    return this.lastWasTouch;
+  }
+
   /** Queue a one-frame press from UI buttons (pause, weapon, radio...). */
   press(k: keyof InputState): void {
     (this.extPressed as Record<string, boolean>)[k] = true;

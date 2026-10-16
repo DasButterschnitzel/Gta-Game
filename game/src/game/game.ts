@@ -25,6 +25,10 @@ import { HUD, type Blip } from '../ui/hud';
 import { clamp, clamp01, lerp, smoothstep } from '../core/math';
 import { AudioEngine } from '../audio/audio';
 import { GameAudio } from '../audio/gameAudio';
+import { RadioPlayer, STATIONS } from '../audio/radio';
+import { loadSettings, saveSettings, storeGet, type Settings } from '../core/settings';
+import { PauseMenu, type MenuHost } from '../ui/menu';
+import { MapView } from '../ui/map';
 import { Effects } from '../render/effects';
 import { RNG } from '../core/rng';
 import { CombatSystem } from './combat';
@@ -38,7 +42,7 @@ import { PoliceView } from '../render/policeView';
 const nextFrame = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 const STEP = 1 / 60;
 
-export class Game implements WorldAPI, PlayerHost {
+export class Game implements WorldAPI, PlayerHost, MenuHost {
   renderer!: Renderer;
   city!: City;
   cityRenderer!: CityRenderer;
@@ -84,6 +88,14 @@ export class Game implements WorldAPI, PlayerHost {
   private drawList: CharDraw[] = [];
   audio = new AudioEngine();
   sound!: GameAudio;
+  radio!: RadioPlayer;
+  settings: Settings = loadSettings();
+  menu!: PauseMenu;
+  mapView!: MapView;
+  private vibrateOn = true;
+  private lowEnd = false;
+  quit: (() => void) | null = null;
+  private radioPrefs = new Map<Vehicle, number>();
   fx!: Effects;
   combat!: CombatSystem;
   pickups!: PickupSystem;
@@ -101,6 +113,8 @@ export class Game implements WorldAPI, PlayerHost {
     progress(0.05, 'Starte Grafik …');
     await nextFrame();
     const lowEnd = (navigator.hardwareConcurrency || 4) <= 4 && Math.min(screen.width, screen.height) * (window.devicePixelRatio || 1) < 800;
+    this.lowEnd = lowEnd;
+    if (lowEnd && !storeGet('settings')) this.settings.quality = 'mid';
     this.renderer = new Renderer(this.app, { antialias: !lowEnd, maxPixelRatio: lowEnd ? 1.25 : 1.75 });
     progress(0.12, 'Baue Neuhafen …');
     await nextFrame();
@@ -157,6 +171,21 @@ export class Game implements WorldAPI, PlayerHost {
       console.warn('audio init failed', e);
     }
     this.sound = new GameAudio(this.audio);
+    this.radio = new RadioPlayer(this.audio);
+    this.menu = new PauseMenu(this.ui, this);
+    this.mapView = new MapView(this.ui, this.city, this.hud.minimap);
+    this.mapView.onClose = (): void => {
+      this.mapView.show(false);
+      if (this.menuFromMap) this.menu.show(true);
+      else this.setPaused(false);
+    };
+    this.hud.radarEl.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      this.input.press('mapPressed');
+    });
+    const bridge = (window as unknown as { HGNative?: { exit(): void } }).HGNative;
+    if (bridge && typeof bridge.exit === 'function') this.quit = (): void => bridge.exit();
+    this.applySettings();
     const unlock = (): void => {
       this.audio.resume();
       if (!this.audioUnlocked && this.audio.ctx && this.audio.ctx.state === 'running') {
@@ -212,7 +241,20 @@ export class Game implements WorldAPI, PlayerHost {
     }
     if (p.pausePressed) {
       p.pausePressed = false;
-      this.togglePause();
+      this.back();
+    }
+    if (p.mapPressed) {
+      p.mapPressed = false;
+      if (this.mapView.isOpen) this.mapView.onClose?.();
+      else if (this.running && this.bustedT <= 0) {
+        this.menuFromMap = false;
+        this.setPaused(true, false);
+        this.openMapView();
+      }
+    }
+    if (p.radioNext) {
+      p.radioNext = false;
+      if (!this.paused && this.player.inVehicle && this.bustedT <= 0) this.radioNext();
     }
     if (this.slowT > 0) {
       this.slowT -= dt;
@@ -224,7 +266,7 @@ export class Game implements WorldAPI, PlayerHost {
       let steps = 0;
       while (this.acc >= STEP && steps < 5) {
         const stepInput: InputState = { ...inp };
-        for (const k of ['enterPressed', 'firePressed', 'weaponNext', 'weaponPrev', 'radioNext', 'mapPressed', 'actionPressed'] as const) {
+        for (const k of ['enterPressed', 'firePressed', 'weaponNext', 'weaponPrev', 'actionPressed'] as const) {
           stepInput[k] = p[k];
           p[k] = false;
         }
@@ -239,15 +281,81 @@ export class Game implements WorldAPI, PlayerHost {
     this.cpuMs = lerp(this.cpuMs, performance.now() - tStart, 0.05);
   }
 
+  private menuFromMap = false;
+
   togglePause(): void {
     this.setPaused(!this.paused);
   }
 
-  setPaused(v: boolean): void {
+  setPaused(v: boolean, showMenu = true): void {
     if (!this.running) return;
     this.paused = v;
-    this.hud.center(this.paused ? 'PAUSE' : '', this.paused ? 9999 : 0.01);
     if (v) this.sound.stopAll();
+    this.radio?.setVolume(v ? 0.25 : this.settings.music > 0 ? 0.85 : 0);
+    this.menu.show(v && showMenu);
+    if (!v) this.mapView.show(false);
+    this.touch.show(!v && (this.input.lastTouch || matchMedia('(pointer: coarse)').matches));
+  }
+
+  /** Android back button / Esc */
+  back(): void {
+    if (this.mapView.isOpen) {
+      this.mapView.onClose?.();
+      return;
+    }
+    if (this.menu.back()) return;
+    this.togglePause();
+  }
+
+  resume(): void {
+    this.setPaused(false);
+  }
+
+  openMap(): void {
+    this.menuFromMap = true;
+    this.menu.show(false);
+    this.openMapView();
+  }
+
+  private openMapView(): void {
+    const pl = this.player;
+    const blips: Blip[] = [];
+    this.police.blips(blips, this.time);
+    this.mapView.show(true, pl.x, pl.y, pl.vehicle ? pl.vehicle.angle : pl.char.heading, blips);
+  }
+
+  applySettings(): void {
+    const s = this.settings;
+    this.audio.setVolumes({ sfx: s.sfx, music: s.music });
+    this.touch.steerButtons = s.steer === 'buttons';
+    this.touch.setMode(this.player?.inVehicle ? 'car' : 'foot');
+    this.vibrateOn = s.vibrate;
+    const q = s.quality;
+    const maxPR = q === 'low' ? 1 : q === 'mid' ? 1.35 : this.lowEnd ? 1.5 : 1.75;
+    this.renderer.setMaxPixelRatio(maxPR);
+    this.fx.quality = q === 'low' ? 0.5 : q === 'mid' ? 0.75 : 1;
+    this.traffic.maxCars = q === 'low' ? 14 : q === 'mid' ? 17 : 20;
+    this.peds.maxPeds = q === 'low' ? 22 : q === 'mid' ? 28 : 34;
+    this.hud.showFps(s.fps);
+    saveSettings(s);
+  }
+
+  /** the station a car's radio is tuned to (emergency vehicles: off) */
+  private radioPref(v: Vehicle): number {
+    let st = this.radioPrefs.get(v);
+    if (st === undefined) {
+      st = v.def.emergency ? -1 : (v.id * 7919) % 100 < 12 ? -1 : (v.id * 31) % STATIONS.length;
+      if (v.missionTag === 'gisela') st = 3; // Dende only listens to Motorik 4
+      this.radioPrefs.set(v, st);
+    }
+    return st;
+  }
+
+  private radioNext(): void {
+    const v = this.player.vehicle;
+    const n = this.radio.next();
+    if (v) this.radioPrefs.set(v, n);
+    this.hud.radioName(n >= 0 ? STATIONS[n].name : 'Radio aus', n >= 0 ? STATIONS[n].tagline : '');
   }
 
   private fixedStep(dt: number, inp: InputState): void {
@@ -776,6 +884,9 @@ export class Game implements WorldAPI, PlayerHost {
   private drivenOnce = false;
   onEnterVehicle(v: Vehicle, jacked: Character | null): void {
     this.hud.vehicleName(v.def.name);
+    const st = this.radioPref(v);
+    this.radio.tune(st, false);
+    if (st >= 0) this.hud.radioName(STATIONS[st].name, STATIONS[st].tagline, 1.2);
     this.hud.clearHint();
     if (!this.drivenOnce) {
       this.drivenOnce = true;
@@ -806,6 +917,7 @@ export class Game implements WorldAPI, PlayerHost {
   }
 
   onExitVehicle(v: Vehicle, bailed: boolean): void {
+    this.radio.off();
     if (bailed) this.camera.addShake(0.3);
     else this.sound.play('door', v.x, v.y, 0.6);
   }
@@ -973,6 +1085,7 @@ export class Game implements WorldAPI, PlayerHost {
   }
 
   private vibrate(ms: number): void {
+    if (!this.vibrateOn) return;
     try {
       const bridge = (window as unknown as { HGNative?: { vibrate(ms: number): void } }).HGNative;
       if (bridge) bridge.vibrate(Math.round(ms));

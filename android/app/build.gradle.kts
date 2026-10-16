@@ -3,8 +3,8 @@ plugins {
 }
 
 // Versioning can be overridden from the command line: -PversionCode=5 -PversionName=0.3.0
-val vCode = (project.findProperty("versionCode") as String?)?.toInt() ?: 1
-val vName = (project.findProperty("versionName") as String?) ?: "0.1.0"
+val vCode = (project.findProperty("versionCode") as String?)?.toInt() ?: 2
+val vName = (project.findProperty("versionName") as String?) ?: "0.2.0"
 
 android {
     namespace = "de.dasbutterschnitzel.hafengold"
