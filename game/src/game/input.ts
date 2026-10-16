@@ -92,6 +92,7 @@ export class Input {
   /** scripted input for automated tests (overrides when set) */
   scripted: Partial<InputState> | null = null;
   private steerSmooth = 0;
+  private touchSteer = 0;
   private extPressed: Partial<InputState> = {};
 
   constructor(target: Window = window) {
@@ -129,7 +130,7 @@ export class Input {
     return false;
   }
 
-  poll(dt: number, inVehicle: boolean): InputState {
+  poll(dt: number, inVehicle: boolean, speed = 0): InputState {
     const s = emptyInput();
     // ---- keyboard ----
     const up = this.k('KeyW', 'ArrowUp');
@@ -208,10 +209,14 @@ export class Input {
     if (t.stickActive) {
       s.moveX = t.stickX;
       s.moveY = t.stickY;
-      // steering response curve: fine near the centre, full at the edge
+      // steering: small dead zone, finer near the centre (more so at speed), lightly smoothed
       const sx = t.stickX;
-      s.steer = Math.sign(sx) * Math.pow(Math.abs(sx), 1.35);
-    }
+      const ax = Math.max(0, (Math.abs(sx) - 0.07) / 0.93);
+      const expo = 1.3 + Math.min(0.6, speed / 45);
+      const target = Math.sign(sx) * Math.pow(ax, expo);
+      this.touchSteer += (target - this.touchSteer) * Math.min(1, dt * 16);
+      s.steer = this.touchSteer;
+    } else this.touchSteer += (0 - this.touchSteer) * Math.min(1, dt * 20);
     if (t.steerLeft || t.steerRight) s.steer = (t.steerRight ? 1 : 0) - (t.steerLeft ? 1 : 0);
     if (t.gas) s.throttle = 1;
     if (t.brake) s.brake = 1;

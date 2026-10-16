@@ -49,6 +49,11 @@ interface RayHit {
 
 const GRAVITY = 16;
 
+/** damage multiplier for NPC attacks on the player (keeps fights winnable on a phone) */
+function npcVsPlayer(attacker: Character): number {
+  return attacker.role === 'cop' ? 0.5 : 0.35;
+}
+
 export class CombatSystem {
   readonly projectiles: Projectile[] = [];
   readonly fires: FireArea[] = [];
@@ -219,15 +224,17 @@ export class CombatSystem {
       g.fx.tracer(mx, my, hx, hy, def.pellets > 1 ? 0.6 : 1);
       if (!hit) continue;
       const dist = Math.hypot(hx - mx, hy - my);
-      const dmg = def.damage * (1 - 0.35 * (dist / def.range));
+      let dmg = def.damage * (1 - 0.35 * (dist / def.range));
       const tag = hit.tag;
       if (tag.kind === 'char') {
         const c = tag.ref as Character;
         const dx = Math.cos(a);
         const dy = Math.sin(a);
+        const vsPlayer = c === g.player.char && shooter !== null && shooter !== c;
+        if (vsPlayer) dmg *= npcVsPlayer(shooter);
         const killed = c.damage(dmg, shooter, dx * def.knock * 1.5, dy * def.knock * 1.5);
         g.fx.blood(c.x, c.y, killed ? 1.3 : 0.6);
-        if (!killed && def.knock > 3 && this.rng.chance(0.5)) c.knockDown(dx * def.knock, dy * def.knock, 1.2);
+        if (!killed && def.knock > 3 && this.rng.chance(vsPlayer ? 0.15 : 0.5)) c.knockDown(dx * def.knock, dy * def.knock, 1.2);
         g.sound.play('hit_flesh', c.x, c.y, 0.5);
         g.onCharHit(c, shooter, dmg, killed, wid);
       } else if (tag.kind === 'vehicle') {
@@ -258,10 +265,11 @@ export class CombatSystem {
     const target = g.findCharacterNear(tx, ty, reach * 0.85, c);
     if (target) {
       const dir = Math.atan2(target.y - c.y, target.x - c.x);
-      const killed = target.damage(def.damage, c, Math.cos(dir) * def.knock, Math.sin(dir) * def.knock);
+      const vsPlayer = target === g.player.char;
+      const killed = target.damage(def.damage * (vsPlayer ? npcVsPlayer(c) : 1), c, Math.cos(dir) * def.knock, Math.sin(dir) * def.knock);
       g.sound.play(def.sound, target.x, target.y, 0.8);
       if (killed) g.fx.blood(target.x, target.y, 1.2);
-      const kdChance = wid === 'bat' ? 0.75 : 0.35;
+      const kdChance = vsPlayer ? (wid === 'bat' ? 0.25 : 0.08) : wid === 'bat' ? 0.75 : 0.35;
       if (!killed && this.rng.chance(kdChance)) target.knockDown(Math.cos(dir) * def.knock, Math.sin(dir) * def.knock, wid === 'bat' ? 1.8 : 1.4);
       g.alarm(target.x, target.y, 12, 0.6);
       g.onCharHit(target, c, def.damage, killed, wid);

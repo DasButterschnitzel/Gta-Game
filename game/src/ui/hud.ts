@@ -8,8 +8,10 @@ export interface Blip {
   y: number;
   color: string;
   size?: number;
-  shape?: 'dot' | 'square' | 'tri';
+  shape?: 'dot' | 'square' | 'tri' | 'letter';
   angle?: number;
+  /** letter for contact blips */
+  label?: string;
 }
 
 function buildMinimap(city: City): HTMLCanvasElement {
@@ -88,6 +90,16 @@ export class HUD {
   private ptextT = 0;
   private elRadio: HTMLElement;
   private radioT = 0;
+  private elObj: HTMLElement;
+  private elTimer: HTMLElement;
+  private elArrow: HTMLElement;
+  private elTitle: HTMLElement;
+  private titleT = 0;
+  private elFade: HTMLElement;
+  private lastObj = '';
+  private lastTimer = '';
+  /** GPS route for the radar (world points) */
+  gps: { x: number; y: number }[] = [];
   private last = { money: -1, wanted: -1, hp: -1, armor: -1, speed: -1, weapon: '' };
   private bannerT = 0;
   private vbannerT = 0;
@@ -113,6 +125,11 @@ export class HUD {
       <div class="vbanner"></div>
       <div class="ptext"></div>
       <div class="rbanner"></div>
+      <div class="objective"></div>
+      <div class="mtimer"></div>
+      <div class="tarrow">➤</div>
+      <div class="titlecard"><b></b><small></small></div>
+      <div class="fadeov"></div>
       <div class="speedo" style="display:none"></div>
       <div class="center-msg"></div>
       <div class="hint"></div>
@@ -140,6 +157,69 @@ export class HUD {
     this.elHurt = this.root.querySelector('.hurt') as HTMLElement;
     this.elPText = this.root.querySelector('.ptext') as HTMLElement;
     this.elRadio = this.root.querySelector('.rbanner') as HTMLElement;
+    this.elObj = this.root.querySelector('.objective') as HTMLElement;
+    this.elTimer = this.root.querySelector('.mtimer') as HTMLElement;
+    this.elArrow = this.root.querySelector('.tarrow') as HTMLElement;
+    this.elTitle = this.root.querySelector('.titlecard') as HTMLElement;
+    this.elFade = this.root.querySelector('.fadeov') as HTMLElement;
+  }
+
+  /** mission objective line (empty hides it) and timer (seconds or null) */
+  mission(objective: string, timer: number | null): void {
+    if (objective !== this.lastObj) {
+      this.lastObj = objective;
+      this.elObj.textContent = objective;
+      this.elObj.style.display = objective ? 'block' : 'none';
+    }
+    const t = timer === null ? '' : `${Math.floor(Math.max(0, timer) / 60)}:${String(Math.floor(Math.max(0, timer) % 60)).padStart(2, '0')}`;
+    if (t !== this.lastTimer) {
+      this.lastTimer = t;
+      this.elTimer.textContent = t;
+      this.elTimer.style.display = t ? 'block' : 'none';
+      this.elTimer.classList.toggle('low', timer !== null && timer < 10);
+    }
+  }
+
+  objectiveFlash(): void {
+    this.elObj.classList.remove('flash');
+    void this.elObj.offsetWidth;
+    this.elObj.classList.add('flash');
+  }
+
+  /** screen-edge arrow towards an off-screen target (sx, sy in CSS px) */
+  targetArrow(show: boolean, sx = 0, sy = 0, color = '#ffd84a'): void {
+    if (!show) {
+      this.elArrow.style.display = 'none';
+      return;
+    }
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    const cx = W / 2;
+    const cy = H / 2;
+    const dx = sx - cx;
+    const dy = sy - cy;
+    const m = 34;
+    const k = Math.min((W / 2 - m) / Math.max(1e-3, Math.abs(dx)), (H / 2 - m) / Math.max(1e-3, Math.abs(dy)));
+    const x = cx + dx * k;
+    const y = cy + dy * k;
+    this.elArrow.style.display = 'block';
+    this.elArrow.style.left = `${x}px`;
+    this.elArrow.style.top = `${y}px`;
+    this.elArrow.style.color = color;
+    this.elArrow.style.transform = `translate(-50%, -50%) rotate(${Math.atan2(dy, dx)}rad)`;
+  }
+
+  titleCard(text: string, sub: string, secs: number): void {
+    (this.elTitle.querySelector('b') as HTMLElement).textContent = text;
+    (this.elTitle.querySelector('small') as HTMLElement).textContent = sub;
+    this.elTitle.classList.add('show');
+    this.titleT = secs;
+  }
+
+  /** fade the screen to black (1) or back (0) */
+  fade(to: number, secs: number): void {
+    this.elFade.style.transition = `opacity ${secs}s linear`;
+    this.elFade.style.opacity = String(to);
   }
 
   /** radio station banner; `delay` lets the vehicle name show first */
@@ -228,6 +308,7 @@ export class HUD {
     if (this.hintT > 0 && (this.hintT -= dt) <= 0) this.elHint.classList.remove('show');
     if (this.ptextT > 0 && (this.ptextT -= dt) <= 0) this.elPText.classList.remove('show');
     if (this.radioT > 0 && (this.radioT -= dt) <= 0) this.elRadio.classList.remove('show');
+    if (this.titleT > 0 && (this.titleT -= dt) <= 0) this.elTitle.classList.remove('show');
     if (this.hurtA > 0) {
       this.hurtA = Math.max(0, this.hurtA - dt * 1.6);
       this.elHurt.style.opacity = this.hurtA.toFixed(3);
@@ -300,6 +381,21 @@ export class HUD {
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(mm, srcX, srcY, srcW, srcW, 0, 0, Wpx, Wpx);
     ctx.globalAlpha = 1;
+    // GPS route
+    if (this.gps.length > 1) {
+      ctx.strokeStyle = 'rgba(255,216,74,0.9)';
+      ctx.lineWidth = 4 * (Wpx / 160);
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      for (let i = 0; i < this.gps.length; i++) {
+        const gx = R + (this.gps[i].x - px) * scale;
+        const gy = R - (this.gps[i].y - py) * scale;
+        if (i === 0) ctx.moveTo(gx, gy);
+        else ctx.lineTo(gx, gy);
+      }
+      ctx.stroke();
+    }
     // blips
     for (const b of blips) {
       let dx = (b.x - px) * scale;
@@ -316,8 +412,28 @@ export class HUD {
       ctx.lineWidth = 2;
       const sz = (b.size ?? 5) * (Wpx / 160);
       ctx.beginPath();
+      if (b.shape === 'letter') {
+        const lr = sz * 1.5;
+        ctx.arc(R + dx, R + dy, lr, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(10,12,16,0.9)';
+        ctx.fill();
+        ctx.strokeStyle = b.color;
+        ctx.lineWidth = 2.5;
+        ctx.stroke();
+        ctx.fillStyle = b.color;
+        ctx.font = `900 ${Math.round(lr * 1.3)}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(b.label ?? '?', R + dx, R + dy + 1);
+        continue;
+      }
       if (b.shape === 'square') ctx.rect(R + dx - sz, R + dy - sz, sz * 2, sz * 2);
-      else ctx.arc(R + dx, R + dy, sz, 0, Math.PI * 2);
+      else if (b.shape === 'tri') {
+        ctx.moveTo(R + dx, R + dy - sz * 1.3);
+        ctx.lineTo(R + dx + sz * 1.1, R + dy + sz * 0.9);
+        ctx.lineTo(R + dx - sz * 1.1, R + dy + sz * 0.9);
+        ctx.closePath();
+      } else ctx.arc(R + dx, R + dy, sz, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
     }

@@ -1,5 +1,6 @@
 // Entry point. Boots the renderer, generates the city and starts the game loop.
 import { Game } from './game/game';
+import { hasSave } from './game/save';
 
 declare const __VERSION__: string;
 
@@ -31,28 +32,48 @@ async function boot(): Promise<void> {
   };
   w.__hgResume = (): void => game.audio.resume();
   const loading = document.getElementById('loading')!;
-  const go = (): void => {
+  const params = new URLSearchParams(location.search);
+  const go = (mode: 'new' | 'continue' | 'free'): void => {
     game.audio.resume();
     loading.classList.add('hidden');
-    game.start();
+    game.start(mode === 'free');
+    if (mode === 'new') game.newGame();
+    else if (mode === 'continue' && !game.continueGame()) game.newGame();
   };
-  if (new URLSearchParams(location.search).has('autostart')) {
-    go();
+  if (params.has('autostart')) {
+    go(params.has('story') ? 'new' : 'free');
     return;
   }
   const bar = loading.querySelector('.bar') as HTMLElement;
   const txt = document.getElementById('loadtext')!;
   bar.style.display = 'none';
   txt.style.display = 'none';
-  const btn = document.createElement('button');
-  btn.className = 'startbtn';
-  btn.textContent = 'SPIELEN';
-  loading.appendChild(btn);
+  const box = document.createElement('div');
+  box.className = 'startbox';
+  const saved = hasSave();
+  box.innerHTML = saved
+    ? '<button class="startbtn" data-m="continue">WEITERSPIELEN</button><button class="startbtn alt" data-m="new">NEUES SPIEL</button>'
+    : '<button class="startbtn" data-m="new">NEUES SPIEL</button>';
+  loading.appendChild(box);
   const hint = document.createElement('div');
   hint.className = 'starthint';
-  hint.textContent = 'Kopfhörer empfohlen · Querformat';
+  hint.textContent = 'Kopfhörer empfohlen · Querformat · komplett offline';
   loading.appendChild(hint);
-  btn.addEventListener('click', go, { once: true });
+  box.querySelectorAll<HTMLButtonElement>('button').forEach((b) =>
+    b.addEventListener(
+      'click',
+      () => {
+        const m = b.dataset.m as 'new' | 'continue';
+        if (params.has('free')) {
+          go('free');
+          return;
+        }
+        if (m === 'new' && saved && !confirm('Neues Spiel starten? Der alte Spielstand wird beim nächsten Speichern überschrieben.')) return;
+        go(m);
+      },
+      { once: false },
+    ),
+  );
 }
 
 boot();

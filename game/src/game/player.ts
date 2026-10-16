@@ -7,7 +7,7 @@ import { clamp } from '../core/math';
 export interface PlayerHost {
   vehicles: Vehicle[];
   findCharacterNear(x: number, y: number, r: number, exclude: Character): Character | null;
-  isFreeSpot(x: number, y: number, r: number): boolean;
+  isFreeSpot(x: number, y: number, r: number, ignore?: Vehicle | null): boolean;
   onEnterVehicle(v: Vehicle, jacked: Character | null): void;
   onExitVehicle(v: Vehicle, bailed: boolean): void;
   /** attack with the current weapon on foot; aimDir = intended direction (rad) */
@@ -140,6 +140,12 @@ export class PlayerController {
     return v.localToWorld(lx, side * (v.def.width / 2 + 0.55));
   }
 
+  /** sit down in a vehicle immediately (cutscenes / mission starts) */
+  seat(v: Vehicle): void {
+    this.enterTarget = null;
+    this.getIn(v);
+  }
+
   private getIn(v: Vehicle): void {
     const c = this.char;
     this.enterTarget = null;
@@ -187,19 +193,19 @@ export class PlayerController {
     const c = this.char;
     const speed = v.speed;
     let pos: { x: number; y: number } | null = null;
-    for (const side of [1, -1]) {
-      const p = this.doorPoint(v, side);
-      if (this.host.isFreeSpot(p.x, p.y, 0.35)) {
+    const hw = v.def.width / 2;
+    const hl = v.def.length / 2;
+    const cands = [this.doorPoint(v, 1), this.doorPoint(v, -1), v.localToWorld(0, hw + 1.3), v.localToWorld(0, -hw - 1.3), v.localToWorld(-hl - 0.9, 0), v.localToWorld(hl + 0.9, 0), v.localToWorld(-hl * 0.6, hw + 0.8), v.localToWorld(-hl * 0.6, -hw - 0.8)];
+    for (const p of cands) {
+      if (this.host.isFreeSpot(p.x, p.y, 0.3, v)) {
         pos = p;
         break;
       }
     }
     if (!pos) {
-      if (!force) {
-        this.host.hint('Hier kann ich nicht aussteigen', 1.2);
-        return;
-      }
-      pos = v.localToWorld(-v.def.length / 2 - 1.0, 0);
+      // squeeze out anyway: the physics engine pushes Kai clear of whatever is in the way
+      pos = cands[0];
+      void force;
     }
     this.clearVehicleControls(v);
     v.driver = null;

@@ -303,6 +303,8 @@ export interface LaneEdge {
   yieldAtEnd: boolean;
   /** distance before the end where vehicles stop (stop line) */
   stopOffset: number;
+  /** zone whose (raised bridge) barrier this lane runs into, if any */
+  barrier?: number;
 }
 
 export interface ParkedSpot {

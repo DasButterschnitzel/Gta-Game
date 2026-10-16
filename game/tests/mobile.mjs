@@ -10,7 +10,7 @@ const page = await ctx.newPage();
 const errors = [];
 page.on('pageerror', (e) => errors.push(e.message));
 page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') errors.push(`[${m.type()}] ${m.text()}`); });
-await page.goto('http://localhost:8765/', { waitUntil: 'commit' });
+await page.goto('http://localhost:8765/?free', { waitUntil: 'commit' });
 await page.waitForSelector('.startbtn', { timeout: 120000 });
 await page.screenshot({ path: path.join(outDir, 'm0_title.png') });
 await page.tap('.startbtn');

@@ -191,6 +191,7 @@ export function generateCity(seed = 20261016): City {
   placeStreetProps(city, rng);
   buildRailings(city);
   buildZoneBarriers(city);
+  markBarrierLanes(city);
   definePOIs(city);
   finalizeVariants(city);
   return city;
@@ -868,6 +869,35 @@ function buildZoneBarriers(city: City): void {
     const x1 = (r.c + r.lanes + 1) * T;
     city.zoneBarriers.push({ zone: Zone.Hafen, x0, y0: (CANAL.y0 + 3) * T, x1, y1: (CANAL.y0 + 3) * T + 1.2 });
     city.zoneBarriers.push({ zone: Zone.Nord, x0, y0: (RIVER.y0 + 7) * T, x1, y1: (RIVER.y0 + 7) * T + 1.2 });
+  }
+}
+
+/** lanes that run into a raised bridge / closed bridge barrier (blocked while the zone is locked) */
+function markBarrierLanes(city: City): void {
+  const pad = 3;
+  for (const e of city.lanes) {
+    for (const zb of city.zoneBarriers) {
+      let hit = false;
+      for (let i = 0; i < e.xs.length && !hit; i++) {
+        const x = e.xs[i];
+        const y = e.ys[i];
+        if (x > zb.x0 - pad && x < zb.x1 + pad && y > zb.y0 - pad && y < zb.y1 + pad) hit = true;
+        if (!hit && i < e.xs.length - 1) {
+          // segment crosses the barrier strip?
+          const x2 = e.xs[i + 1];
+          const y2 = e.ys[i + 1];
+          const minY = Math.min(y, y2);
+          const maxY = Math.max(y, y2);
+          const minX = Math.min(x, x2);
+          const maxX = Math.max(x, x2);
+          if (maxX > zb.x0 - pad && minX < zb.x1 + pad && maxY > zb.y0 - pad && minY < zb.y1 + pad) hit = true;
+        }
+      }
+      if (hit) {
+        e.barrier = zb.zone;
+        break;
+      }
+    }
   }
 }
 

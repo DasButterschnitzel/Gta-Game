@@ -52,7 +52,7 @@ class MinHeap {
  * Find a sequence of lane edges leading from `from` (exclusive) to an edge that ends within
  * `goalR` metres of (tx, ty). Returns null if nothing is found within `maxExpand` expansions.
  */
-export function findRoute(city: City, from: number, tx: number, ty: number, goalR = 26, maxExpand = 2500): number[] | null {
+export function findRoute(city: City, from: number, tx: number, ty: number, goalR = 26, maxExpand = 2500, blocked?: (id: number) => boolean): number[] | null {
   const lanes = city.lanes;
   const start = lanes[from];
   if (!start) return null;
@@ -78,6 +78,7 @@ export function findRoute(city: City, from: number, tx: number, ty: number, goal
     if (hc < goalR && cur !== from) return unwind(parent, from, cur);
     const gc = g.get(cur)!;
     for (const nx of lanes[cur].next) {
+      if (blocked && (blocked(nx) || (lanes[nx].road < 0 && lanes[nx].next.length > 0 && lanes[nx].next.every((n) => blocked(n))))) continue;
       const e = lanes[nx];
       // police may take any turn; U-turns cost extra
       const cost = e.len * (e.turn === Turn.UTurn ? 3 : 1) + (e.turn === Turn.Left || e.turn === Turn.Right ? 4 : 0);

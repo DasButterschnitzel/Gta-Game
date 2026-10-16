@@ -10,7 +10,7 @@ const page = await ctx.newPage();
 const errors = [];
 page.on('pageerror', (e) => errors.push(e.message + '\n' + e.stack));
 page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
-await page.goto('http://localhost:8765/', { waitUntil: 'commit' });
+await page.goto('http://localhost:8765/?free', { waitUntil: 'commit' });
 await page.waitForSelector('.startbtn', { timeout: 120000 });
 await page.tap('.startbtn');
 await page.waitForTimeout(1200);

@@ -50,6 +50,7 @@ export class TouchControls {
   constructor(parent: HTMLElement, private input: Input) {
     this.root = document.createElement('div');
     this.root.className = 'touch-root';
+    this.root.style.display = 'none';
     parent.appendChild(this.root);
     this.layer = document.createElement('div');
     this.layer.className = 'touch-layer';

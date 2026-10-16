@@ -7,18 +7,23 @@ import { clamp, clamp01, approach, lerp } from '../core/math';
 
 /** Global tuning knobs (exposed for the debug panel). */
 export const TUNE = {
-  gripScale: 1.25,
-  stiffness: 18, // cornering stiffness per unit load (1/rad)
+  gripScale: 1.7,
+  stiffness: 24, // cornering stiffness per unit load (1/rad)
   steerRate: 3.6, // rad/s towards target
   steerReturn: 5.5, // rad/s back to centre
   highSpeedSteer: 0.3, // fraction of steer lock left at high speed
   handbrakeGrip: 0.4, // rear lateral grip multiplier with handbrake
-  driftAssist: 0.55, // counter-steer assistance for the player (0..1)
+  driftAssist: 0.62, // counter-steer assistance for the player (0..1)
   slipFloor: 5, // m/s floor for slip angle computation (low-speed stability)
   inertiaScale: 1.0,
-  espPlayer: 3.2, // yaw stabiliser gain for the player
+  espPlayer: 4.2, // yaw stabiliser gain for the player
   espAI: 6,
-  cgHeight: 0.55,
+  cgHeight: 0.42,
+  /** player traction control / stability throttle cut */
+  tcs: 1,
+  espMinV: 1.5,
+  /** yaw correction gain when the player's car slides without the handbrake */
+  slideAssist: 14,
 };
 
 export interface SurfaceInfo {
@@ -65,7 +70,7 @@ export class Vehicle {
   // --- state ---
   steer = 0;
   health: number;
-  readonly maxHealth: number;
+  maxHealth: number;
   burning = 0; // seconds burning (>0 = on fire)
   exploded = false;
   sinking = 0;
@@ -82,6 +87,8 @@ export class Vehicle {
   speed = 0;
   forwardSpeed = 0;
   private sinceHandbrake = 9;
+  /** rear lateral tyre force of the last step (traction control) */
+  private lastFyR = 0;
   sirenOn = false;
   lightsOn = false;
   /** tyres shredded by a spike strip */
@@ -265,6 +272,18 @@ export class Vehicle {
       const p = def.power * damageFactor * (this.flatTires ? 0.55 : 1);
       Fdrive = throttle * Math.min(def.accelCap * m, p / Math.max(Math.abs(vx), 2.5));
       if (this.shiftT > 0) Fdrive *= 0.35;
+      // player assists for RWD/AWD: traction control + throttle cut while sliding (not right after a handbrake drift)
+      if (TUNE.tcs > 0 && this.assisted && def.drive !== 'FWD' && !this.handbrake && this.sinceHandbrake > 1.0 && speed > 3) {
+        if (TUNE.tcs >= 2) {
+          const muE = def.grip * surf.grip * TUNE.gripScale;
+          const WrE = m * g * 0.48;
+          const cap = Math.sqrt(Math.max(0, (muE * WrE) ** 2 - this.lastFyR * this.lastFyR)) * 0.92;
+          const share = def.drive === 'RWD' ? 1 : 0.6;
+          Fdrive = Math.min(Fdrive, Math.max(cap / share, m * 1.5));
+        }
+        const slide = clamp01((Math.abs(beta) - 0.1) / 0.25);
+        Fdrive *= 1 - 0.85 * slide;
+      }
       if (vx < -0.5) Fdrive += throttle * m * 4; // help stop when rolling backwards
     } else if (throttle < 0) {
       const maxRev = 9;
@@ -353,10 +372,11 @@ export class Vehicle {
       FyR *= k * (1 - spin * 0.35);
     }
     this.spin = lerp(this.spin, clamp01(spin * 2.5 * (speed < 12 ? 1 : 0.6)), 0.2);
+    this.lastFyR = FyR;
 
     // ---- assemble ----
     const Fx = FxF * cd - FyF * sd + FxR + Fdrag + Froll;
-    const Fy = FxF * sd + FyF * cd + FyR - Cd * 3 * vy * Math.abs(vy);
+    let Fy = FxF * sd + FyF * cd + FyR - Cd * 3 * vy * Math.abs(vy);
     let torque = a * (FxF * sd + FyF * cd) - bb * FyR;
     // yaw damping at very low speed to prevent pirouettes on the spot
     if (speed < 2) torque -= w * m * 2.5;
@@ -367,12 +387,24 @@ export class Vehicle {
     const I = b.getInertia();
     if (hb && Math.abs(w) > 3.2) torque -= (w - Math.sign(w) * 3.2) * I * 8;
     if (!hb && this.sinceHandbrake < 0.6 && alive) torque -= w * I * 3.2 * (1 - this.sinceHandbrake / 0.6);
-    if (alive && espGain > 0 && !hb && this.sinceHandbrake > 0.3 && Math.abs(vx) > 4) {
+    if (alive && espGain > 0 && !hb && this.sinceHandbrake > 0.3 && Math.abs(vx) > TUNE.espMinV) {
       const rDes = (vx * Math.tan(this.steer)) / L;
       const rMax = (mu * g * 0.95) / Math.max(Math.abs(vx), 1);
       const rT = clamp(rDes, -rMax, rMax);
       if (Math.abs(w) > Math.abs(rT) + 0.04 || (Math.sign(w) !== Math.sign(rT) && Math.abs(w) > 0.1)) {
         torque -= (w - rT) * I * espGain;
+      }
+    }
+    // arcade slide assist (player only): outside of handbrake drifts the car yaws back towards
+    // its direction of travel, so sustained full lock or lift-off never ends in a pirouette
+    if (TUNE.slideAssist > 0 && this.assisted && alive && !hb && this.sinceHandbrake > 0.8 && speed > 2.5) {
+      const ab = Math.abs(beta);
+      if (ab > 0.3) {
+        const k = clamp01((ab - 0.3) / 0.45);
+        torque += Math.sign(beta) * Math.min(1.2, ab) * I * TUNE.slideAssist * k;
+        // and bleed off some of the sideways speed
+        const lat = -vy * m * 2.2 * k;
+        Fy += lat;
       }
     }
     b.applyForceToCenter(planck.Vec2(Fx * c - Fy * s, Fx * s + Fy * c), true);

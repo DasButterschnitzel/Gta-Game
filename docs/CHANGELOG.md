@@ -1,5 +1,36 @@
 # Changelog
 
+## v0.3.0 — the story begins
+**New**
+- **Prologue „A 26"**: six years earlier, a rainy night, a getaway in a black B5 with four stars on
+  your tail – ending at the raised canal bridge. Then: *6 Jahre später*.
+- **Act 1, missions 1–5**: *Freigang* (Dende and Gisela pick Kai up at the prison), *Altes Revier*
+  (deliveries in Betonhausen, NEON pushers at the playground), *Onkel Herbie* (a pistol for old times'
+  sake and a debt to collect), *Abschleppdienst* (steal a car out of the police impound lot and lose
+  the cops) and *Die Faust von Sankt Paula* (collect protection money for Uschi – one landlord runs,
+  one sends his bouncers, one pays in deposit bottles).
+- **Comic-style dialogue** with drawn portraits for the whole cast, tap to continue, skip button.
+- **Mission system**: objectives, glowing markers, **GPS route on the radar**, arrow to off-screen
+  targets, mission timer, „AUFTRAG ERLEDIGT / GESCHEITERT", contacts shown as letters on the radar.
+- **Saving**: Gül's Grill is your safehouse (white circle = save + heal), autosave after every mission,
+  title screen with *Weiterspielen* / *Neues Spiel*.
+- **Rain** (used in the prologue).
+
+**Fixed (from your test report)**
+- *Leaving the car often failed*: the free-spot check used the physics engine's rough bounding boxes,
+  so a car standing at an angle blocked its own doors. Now exact shapes, more exit spots, and Kai
+  always gets out.
+- *Cars exploding at random*: traffic drove into the closed canal/river bridges, crashed, caught fire
+  and set off chain reactions. Lanes leading onto closed bridges are now avoided (traffic, police
+  and GPS). Crash damage is gentler (your own car takes 35 % less), explosions ignite fewer neighbours,
+  burning cars warn you and take longer to blow up.
+- *„Lightning"*: every explosion flashed the whole screen, even far away. Now only nearby blasts do.
+- *Handling*: much more grip (sharper turns in city junctions), a slide assist that stops spin-outs
+  outside of handbrake drifts, traction/stability help for rear-wheel-drive cars, smoother touch
+  steering with a small dead zone and finer control at speed.
+- Gangsters and cops hit you less hard, fewer knock-downs.
+
+
 ## v0.2.0 — weapons, police, radio
 **New**
 - **Weapons**: fists, baseball bat, pistol, SMG, shotgun, assault rifle, Molotov cocktails and grenades.

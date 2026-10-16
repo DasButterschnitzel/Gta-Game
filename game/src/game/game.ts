@@ -29,6 +29,14 @@ import { RadioPlayer, STATIONS } from '../audio/radio';
 import { loadSettings, saveSettings, storeGet, type Settings } from '../core/settings';
 import { PauseMenu, type MenuHost } from '../ui/menu';
 import { MapView } from '../ui/map';
+import { MissionRunner, type MissionDef } from '../missions/runner';
+import { STORY } from '../missions/story';
+import { MarkerRenderer, type Marker } from '../render/markers';
+import { DialogueUI, type Line } from '../ui/dialogue';
+import { NpcSystem } from './npc';
+import { Respect, type GangId } from './gangs';
+import { loadSave, writeSave, SAVE_VERSION, type SaveData } from './save';
+import { RESERVED } from '../world/layout';
 import { Effects } from '../render/effects';
 import { RNG } from '../core/rng';
 import { CombatSystem } from './combat';
@@ -80,6 +88,7 @@ export class Game implements WorldAPI, PlayerHost, MenuHost {
   private bustedT = 0;
   private bustFine = 0;
   private sprayT = 0;
+  private burnWarned = false;
   private paintHintT = 0;
   paused = false;
   private deadT = 0;
@@ -95,6 +104,19 @@ export class Game implements WorldAPI, PlayerHost, MenuHost {
   private vibrateOn = true;
   private lowEnd = false;
   quit: (() => void) | null = null;
+  missions!: MissionRunner;
+  npcs!: NpcSystem;
+  respect = new Respect();
+  dialogue!: DialogueUI;
+  private markerRenderer!: MarkerRenderer;
+  private markerList: Marker[] = [];
+  /** finished story missions */
+  done = new Set<string>();
+  /** set when the police catch Kai during the prologue */
+  prologCaught = false;
+  private contactCooldown = 0;
+  private safehouseCooldown = 0;
+  playTime = 0;
   private radioPrefs = new Map<Vehicle, number>();
   fx!: Effects;
   combat!: CombatSystem;
@@ -156,6 +178,10 @@ export class Game implements WorldAPI, PlayerHost, MenuHost {
     this.fx = new Effects();
     this.renderer.scene.add(this.fx.root);
     this.combat = new CombatSystem(this);
+    this.npcs = new NpcSystem(this);
+    this.missions = new MissionRunner(this);
+    this.markerRenderer = new MarkerRenderer();
+    this.renderer.scene.add(this.markerRenderer.root);
     this.pickups = new PickupSystem(this.city);
     this.pickupRenderer = new PickupRenderer();
     this.renderer.scene.add(this.pickupRenderer.root);
@@ -173,6 +199,8 @@ export class Game implements WorldAPI, PlayerHost, MenuHost {
     this.sound = new GameAudio(this.audio);
     this.radio = new RadioPlayer(this.audio);
     this.menu = new PauseMenu(this.ui, this);
+    this.dialogue = new DialogueUI(this.ui);
+    this.dialogue.onLine = (): void => this.sound.play('click', undefined, undefined, 0.25);
     this.mapView = new MapView(this.ui, this.city, this.hud.minimap);
     this.mapView.onClose = (): void => {
       this.mapView.show(false);
@@ -213,7 +241,7 @@ export class Game implements WorldAPI, PlayerHost, MenuHost {
     this.camera.snap(start.x, start.y, 42);
   }
 
-  start(): void {
+  start(freeRoam = false): void {
     this.running = true;
     this.last = performance.now();
     const loop = (t: number): void => {
@@ -226,16 +254,25 @@ export class Game implements WorldAPI, PlayerHost, MenuHost {
     };
     requestAnimationFrame(loop);
     this.hud.district('JVA Neuhafen');
-    this.hud.hint(this.touch && matchMedia('(pointer: coarse)').matches ? 'Steig in Giselas Golfo: EINSTEIGEN' : 'F = Einsteigen · WASD/Pfeile = Fahren · Leertaste = Handbremse', 6);
+    if (freeRoam) {
+      for (const d of STORY) this.done.add(d.id);
+      this.hud.hint(this.touch && matchMedia('(pointer: coarse)').matches ? 'Steig in Giselas Golfo: EINSTEIGEN' : 'F = Einsteigen · WASD/Pfeile = Fahren · Leertaste = Handbremse', 6);
+    }
   }
 
   // ------------------------------------------------------------------------------------
   cpuMs = 0;
   private frame(dt: number): void {
     const tStart = performance.now();
-    const inp = this.input.poll(dt, this.player.inVehicle);
+    const inp = this.input.poll(dt, this.player.inVehicle, this.player.vehicle?.speed ?? 0);
     // accumulate edges so fixed steps never miss a press
     const p = this.pending;
+    if (this.dialogue?.active || this.swallowInput > 0) {
+      this.swallowInput -= dt;
+      inp.enterPressed = inp.firePressed = inp.actionPressed = false;
+      inp.fire = false;
+      p.enterPressed = p.firePressed = p.actionPressed = false;
+    }
     for (const k of ['enterPressed', 'firePressed', 'weaponNext', 'weaponPrev', 'radioNext', 'pausePressed', 'mapPressed', 'actionPressed'] as const) {
       p[k] = p[k] || inp[k];
     }
@@ -260,7 +297,8 @@ export class Game implements WorldAPI, PlayerHost, MenuHost {
       this.slowT -= dt;
       if (this.slowT <= 0) this.timeScale = 1;
     }
-    if (!this.paused) {
+    if (this.dialogue?.active) this.dialogue.update(dt);
+    if (!this.paused && !this.dialogue?.active) {
       dt *= this.timeScale;
       this.acc += dt;
       let steps = 0;
@@ -277,11 +315,13 @@ export class Game implements WorldAPI, PlayerHost, MenuHost {
       if (steps === 5) this.acc = 0;
       this.frameUpdate(dt);
     }
-    this.renderFrame(this.paused ? 1 : this.acc / STEP);
+    this.renderFrame(this.paused || this.dialogue?.active ? 1 : this.acc / STEP);
     this.cpuMs = lerp(this.cpuMs, performance.now() - tStart, 0.05);
   }
 
   private menuFromMap = false;
+  /** seconds during which action presses are ignored (after dialogues) */
+  private swallowInput = 0;
 
   togglePause(): void {
     this.setPaused(!this.paused);
@@ -321,6 +361,8 @@ export class Game implements WorldAPI, PlayerHost, MenuHost {
     const pl = this.player;
     const blips: Blip[] = [];
     this.police.blips(blips, this.time);
+    this.missions.blips(blips);
+    this.contactBlips(blips);
     this.mapView.show(true, pl.x, pl.y, pl.vehicle ? pl.vehicle.angle : pl.char.heading, blips);
   }
 
@@ -364,6 +406,7 @@ export class Game implements WorldAPI, PlayerHost, MenuHost {
     this.traffic.step(dt);
     this.police.step(dt);
     this.peds.step(dt);
+    this.npcs.step(dt);
     for (const v of this.vehicles) {
       v.savePrev();
       v.setSurface(this.city.surfaceAt(v.x, v.y));
@@ -388,6 +431,9 @@ export class Game implements WorldAPI, PlayerHost, MenuHost {
     this.peds.manage(dt, px, py);
     this.police.manage(dt);
     this.wanted.step(dt, this.police.seen, px, py);
+    this.playTime += dt;
+    this.missions.frame(dt);
+    this.updateContacts(dt);
     this.checkPaintShops(dt);
     if (this.bustedT > 0) {
       this.bustedT += dt;
@@ -437,6 +483,9 @@ export class Game implements WorldAPI, PlayerHost, MenuHost {
     }
     if (this.gisela && !this.gisela.dead && pl.vehicle !== this.gisela) blips.push({ x: this.gisela.x, y: this.gisela.y, color: '#ff4040', size: 5, shape: 'square' });
     const veh = pl.vehicle;
+    this.hud.mission(this.missions.objective, this.missions.timer ? this.missions.timer.left : null);
+    this.hud.gps = this.missions.gps;
+    this.updateTargetArrow();
     this.hud.update(dt, {
       money: this.money,
       wanted: this.wanted.level,
@@ -530,7 +579,9 @@ export class Game implements WorldAPI, PlayerHost, MenuHost {
         if (!v) continue;
         const dv = it.impulse / v.def.mass;
         if (dv > 2.2) {
-          let dmg = (dv - 2.2) * 5.5;
+          // gentler than before: small bumps don't hurt, the player's car is a bit tougher
+          let dmg = Math.max(0, dv - 3.2) * 4.4;
+          if (v === this.player.vehicle) dmg *= 0.65;
           if (other && other.def.heavy && !v.def.heavy) dmg *= 1.3;
           // police drivers survive their own scrapes with walls better (takedowns need ramming)
           if (other !== this.player.vehicle && v.ai && v !== this.player.vehicle && this.police.isPoliceVehicle(v)) dmg *= 0.45;
@@ -588,7 +639,12 @@ export class Game implements WorldAPI, PlayerHost, MenuHost {
   private updateHazards(dt: number): void {
     for (const v of this.vehicles) {
       if (v.exploded) continue;
-      if (v.burning > 0 && v.burning > 4.2) this.explode(v);
+      if (v.burning > 0 && v === this.player.vehicle && !this.burnWarned) {
+        this.burnWarned = true;
+        this.hud.hint('Dein Auto brennt – raus da!', 3);
+        this.vibrate(200);
+      }
+      if (v.burning > 5.5) this.explode(v);
       if (v.sunk) {
         if (v === this.player.vehicle) {
           this.player.char.kill();
@@ -636,7 +692,7 @@ export class Game implements WorldAPI, PlayerHost, MenuHost {
       const d = Math.hypot(o.x - x, o.y - y);
       if (d > R) continue;
       const k = 1 - d / R;
-      o.damage((60 * k + (k > 0.55 ? 45 : 0)) * power, by);
+      o.damage((50 * k + (k > 0.65 ? 30 : 0)) * power, by);
       const dir = Math.atan2(o.y - y, o.x - x);
       o.body.applyLinearImpulse({ x: Math.cos(dir) * o.def.mass * 6 * k * power, y: Math.sin(dir) * o.def.mass * 6 * k * power }, o.body.getWorldCenter(), true);
       o.body.applyAngularImpulse((Math.random() - 0.5) * o.body.getInertia() * 3 * k * power, true);
@@ -656,8 +712,12 @@ export class Game implements WorldAPI, PlayerHost, MenuHost {
     this.alarm(x, y, 40, 2);
     this.fx.explosion(x, y);
     this.sound.play('explosion', x, y, Math.min(1, 0.6 + power * 0.4));
-    this.flashT = 0.35 * Math.min(1, power + 0.15);
-    this.vibrate(120);
+    // only nearby blasts light up the screen (far away ones looked like lightning)
+    const dCam = Math.hypot(x - this.camera.x, y - this.camera.y);
+    if (dCam < 55) {
+      this.flashT = Math.max(this.flashT, 0.3 * Math.min(1, power + 0.15) * (1 - dCam / 55));
+      this.vibrate(Math.round(120 * (1 - dCam / 55)));
+    }
     if (by) this.onShot(by, x, y, 'grenade');
   }
 
@@ -787,6 +847,11 @@ export class Game implements WorldAPI, PlayerHost, MenuHost {
     this.charRenderer.update(list);
     this.pickupRenderer.update(this.pickups.list, this.time, view);
     this.policeView.update(this.police.heli, this.police.spikes, alpha);
+    const ml = this.markerList;
+    ml.length = 0;
+    this.missions.markers(ml);
+    this.contactMarkers(ml);
+    this.markerRenderer.update(ml, this.time);
     const vr = r.viewRect(10);
     this.cityRenderer.update(vr.x0, vr.y0, vr.x1, vr.y1, force);
     r.render();
@@ -847,6 +912,11 @@ export class Game implements WorldAPI, PlayerHost, MenuHost {
     return signalStateAt(this.time, j ? j.phase : 0, group);
   }
 
+  laneBlocked(id: number): boolean {
+    const z = this.city.lanes[id]?.barrier;
+    return z !== undefined && this.physics.isZoneLocked(z);
+  }
+
   alarm(x: number, y: number, radius: number, severity: number): void {
     this.peds?.alarm(x, y, radius, severity);
   }
@@ -865,16 +935,28 @@ export class Game implements WorldAPI, PlayerHost, MenuHost {
     return best;
   }
 
-  isFreeSpot(x: number, y: number, r: number): boolean {
+  isFreeSpot(x: number, y: number, r: number, ignore: Vehicle | null = null): boolean {
     const tx = Math.floor(x / TILE);
     const ty = Math.floor(y / TILE);
     if (!this.city.isWalkableTile(tx, ty)) return false;
     let free = true;
+    // test the real shapes (the broad-phase boxes of rotated cars are much bigger than the cars)
+    const probes = [
+      { x, y },
+      { x: x + r, y },
+      { x: x - r, y },
+      { x, y: y + r },
+      { x, y: y - r },
+    ];
     this.physics.world.queryAABB({ lowerBound: { x: x - r, y: y - r }, upperBound: { x: x + r, y: y + r } }, (f) => {
-      const tag = f.getUserData() as { kind?: string } | undefined;
-      if (tag && (tag.kind === 'static' || tag.kind === 'vehicle' || tag.kind === 'barrier')) {
-        free = false;
-        return false;
+      const tag = f.getUserData() as { kind?: string; ref?: unknown } | undefined;
+      if (!tag || !(tag.kind === 'static' || tag.kind === 'vehicle' || tag.kind === 'barrier')) return true;
+      if (ignore && tag.ref === ignore) return true;
+      for (const p of probes) {
+        if (f.testPoint(p)) {
+          free = false;
+          return false;
+        }
       }
       return true;
     });
@@ -882,13 +964,17 @@ export class Game implements WorldAPI, PlayerHost, MenuHost {
   }
 
   private drivenOnce = false;
+  get isTouch(): boolean {
+    return this.input.lastTouch || matchMedia('(pointer: coarse)').matches;
+  }
   onEnterVehicle(v: Vehicle, jacked: Character | null): void {
+    this.burnWarned = v.burning > 0;
     this.hud.vehicleName(v.def.name);
     const st = this.radioPref(v);
     this.radio.tune(st, false);
     if (st >= 0) this.hud.radioName(STATIONS[st].name, STATIONS[st].tagline, 1.2);
     this.hud.clearHint();
-    if (!this.drivenOnce) {
+    if (!this.drivenOnce && !this.missions?.running) {
       this.drivenOnce = true;
       const touch = this.touch && matchMedia('(pointer: coarse)').matches;
       this.hud.hint(touch ? 'Links lenken · GAS / BREMSE · HANDBREMSE = Drift' : 'W/S = Gas/Bremse · A/D = Lenken · Leertaste = Handbremse · F = Aussteigen', 6);
@@ -1003,7 +1089,15 @@ export class Game implements WorldAPI, PlayerHost, MenuHost {
   }
 
   /** the police got you */
+  get isBusted(): boolean {
+    return this.bustedT > 0;
+  }
+
   bust(): void {
+    if (this.missions?.active?.noFail) {
+      this.prologCaught = true;
+      return;
+    }
     if (this.bustedT > 0 || this.player.char.dead) return;
     this.bustedT = 0.001;
     this.bustFine = Math.min(this.money, 100 + this.wanted.level * 150);
@@ -1093,6 +1187,278 @@ export class Game implements WorldAPI, PlayerHost, MenuHost {
     } catch {
       /* ignore */
     }
+  }
+
+  // ------------------------------------------------------------------------------------
+  // Story / missions
+  playDialogue(lines: Line[]): Promise<void> {
+    this.touch.show(false);
+    this.hud.clearHint();
+    this.hud.root.classList.add('indialog');
+    const p = this.dialogue.play(lines);
+    return p.then(() => {
+      this.touch.show(this.input.lastTouch || matchMedia('(pointer: coarse)').matches);
+      // taps / keys used to advance the dialogue must not leak into the game
+      this.swallowInput = 0.25;
+      this.hud.root.classList.remove('indialog');
+    });
+  }
+
+  /** next story mission that isn't done yet */
+  nextMission(): MissionDef | null {
+    for (const d of STORY) if (!this.done.has(d.id)) return d;
+    return null;
+  }
+
+  startMission(def: MissionDef): void {
+    if (this.missions.running) return;
+    if (def.id !== 'prolog') this.hud.titleCard(def.title.toUpperCase(), 'AUFTRAG', 2.2);
+    void this.missions.start(def);
+  }
+
+  onMissionPass(def: MissionDef): void {
+    this.done.add(def.id);
+    if (def.reward > 0) {
+      this.money += def.reward;
+      this.hud.center('AUFTRAG ERLEDIGT', 3, '#f6e27a');
+      this.hud.pickupText(`+${def.reward} €`, '#7ce07c');
+      this.sound.play('pass', undefined, undefined, 0.85);
+    }
+    this.saveGame();
+    this.contactCooldown = 3.5;
+    const next = this.nextMission();
+    if (next && !next.start) setTimeout(() => this.startMission(next), def.id === 'prolog' ? 400 : 3500);
+  }
+
+  onMissionFail(def: MissionDef, reason: string): void {
+    this.hud.center('AUFTRAG GESCHEITERT', 3, '#ff5a4a');
+    this.hud.hint(reason, 4);
+    this.sound.play('wasted', undefined, undefined, 0.7);
+    this.contactCooldown = 6;
+  }
+
+  /** the yellow start rings for the next mission and the safehouse save point */
+  private contactMarkers(out: Marker[]): void {
+    if (this.missions.running) return;
+    const next = this.nextMission();
+    const sp = next ? this.missionStart(next) : null;
+    if (sp && this.contactCooldown <= 0) out.push({ x: sp.x, y: sp.y, r: 2.2, color: 'yellow', kind: 'ring' });
+    const safe = this.safehousePoint();
+    if (safe) out.push({ x: safe.x, y: safe.y, r: 1.6, color: 'white', kind: 'ring' });
+  }
+
+  private contactBlips(out: Blip[]): void {
+    if (this.missions.running) return;
+    const next = this.nextMission();
+    const sp = next ? this.missionStart(next) : null;
+    if (sp && next) out.push({ x: sp.x, y: sp.y, color: '#ffd84a', size: 6, shape: 'letter', label: (next.giver[0] ?? '?').toUpperCase() });
+    const safe = this.safehousePoint();
+    if (safe) out.push({ x: safe.x, y: safe.y, color: '#ffffff', size: 5, shape: 'letter', label: '⌂' });
+  }
+
+  private missionStart(def: MissionDef): { x: number; y: number } | null {
+    if (!def.start) return null;
+    if (typeof def.start !== 'string') return def.start;
+    const p = this.city.pois.get(def.start);
+    return p ? { x: p.x, y: p.y + 3 } : null;
+  }
+
+  safehousePoint(): { x: number; y: number } | null {
+    if (!this.done.has('freigang')) return null;
+    const p = this.city.pois.get('safehouse');
+    return p ? { x: p.x - 3, y: p.y + 1.5 } : null;
+  }
+
+  private updateContacts(dt: number): void {
+    if (this.contactCooldown > 0) this.contactCooldown -= dt;
+    if (this.safehouseCooldown > 0) this.safehouseCooldown -= dt;
+    const pl = this.player;
+    if (pl.char.dead || this.bustedT > 0) return;
+    if (!this.missions.running && this.contactCooldown <= 0) {
+      const next = this.nextMission();
+      const sp = next ? this.missionStart(next) : null;
+      if (next && sp) {
+        const d = Math.hypot(pl.x - sp.x, pl.y - sp.y);
+        const slow = !pl.vehicle || pl.vehicle.speed < 3;
+        if (d < (pl.vehicle ? 4.5 : 2.4) && slow) {
+          if (this.wanted.level > 0) {
+            this.hud.hint('Erst die Polizei abhängen!', 2);
+            this.contactCooldown = 2;
+          } else this.startMission(next);
+        }
+      }
+    }
+    const safe = this.safehousePoint();
+    if (safe && !pl.vehicle && !this.missions.running && this.safehouseCooldown <= 0 && Math.hypot(pl.x - safe.x, pl.y - safe.y) < 1.8) {
+      this.safehouseCooldown = 8;
+      if (this.wanted.level > 0) {
+        this.hud.hint('Nicht mit der Polizei auf den Fersen.', 2);
+        return;
+      }
+      pl.char.health = pl.char.maxHealth;
+      this.saveGame();
+      this.hud.center('GESPEICHERT', 1.8, '#ffffff');
+      this.hud.hint("Gül's Grill: Spiel gespeichert, Gesundheit aufgefüllt.", 2.5);
+      this.sound.play('pickup', undefined, undefined, 0.6);
+    }
+  }
+
+  private updateTargetArrow(): void {
+    const t = this.missions.primaryTarget();
+    if (!t) {
+      this.hud.targetArrow(false);
+      return;
+    }
+    const tx = t.x();
+    const ty = t.y();
+    if (this.isVisible(tx, ty, -2)) {
+      this.hud.targetArrow(false);
+      return;
+    }
+    const o = { x: 0, y: 0 };
+    this.renderer.project(tx, ty, 0, o);
+    const col = t.color === 'red' ? '#ff4a3a' : t.color === 'blue' ? '#5aa8ff' : t.color === 'green' ? '#5aff6a' : '#ffd84a';
+    this.hud.targetArrow(true, o.x, o.y, col);
+  }
+
+  giveMoney(n: number): void {
+    this.money += n;
+    this.hud.pickupText(`+${n} €`, '#7ce07c');
+    this.sound.play('money', undefined, undefined, 0.7);
+  }
+
+  setRain(v: number): void {
+    GU.uRain.value = v;
+    this.renderer.setRain(v);
+  }
+
+  flash(secs: number): void {
+    this.flashT = secs;
+  }
+
+  fade(toBlack: boolean, secs: number): Promise<void> {
+    this.hud.fade(toBlack ? 1 : 0, secs);
+    return new Promise((r) => setTimeout(r, secs * 1000));
+  }
+
+  /** put the player straight into the driver's seat */
+  seatPlayer(v: Vehicle): void {
+    const pl = this.player;
+    if (pl.vehicle) pl.exit(pl.vehicle, true);
+    pl.char.showAt(v.x, v.y, v.angle);
+    pl.seat(v);
+    this.camera.snap(v.x, v.y);
+  }
+
+  ensureGisela(): Vehicle {
+    let g = this.gisela;
+    if (!g || g.dead || !this.vehicles.includes(g)) {
+      const start = this.city.pois.get('start')!;
+      g = this.spawnVehicle('gisela', start.x - 5.5, start.y - 2.5, Math.PI / 2, VEHICLES.gisela.colors[0]);
+      this.gisela = g;
+    }
+    g.missionTag = 'gisela';
+    return g;
+  }
+
+  unlockSafehouse(): void {
+    this.hud.hint("Gül's Grill ist jetzt dein Unterschlupf: weißer Kreis = speichern.", 4);
+  }
+
+  policeStation(): { lotX: number; lotY: number } {
+    const r = RESERVED.police;
+    return { lotX: (r.x0 + 6) * TILE, lotY: (r.y0 + 3.5) * TILE };
+  }
+
+  /** end of the prologue: back to the present day at the prison gate */
+  endPrologue(): void {
+    const pl = this.player;
+    const car = pl.vehicle;
+    if (car) pl.exit(car, true);
+    if (car) {
+      for (const c of car.passengers as Character[]) this.removeChar(c);
+      car.passengers.length = 0;
+      car.missionTag = '';
+      this.removeVehicle(car);
+    }
+    this.setRain(0);
+    this.setClock(9.2);
+    this.wanted.clear();
+    this.police.clearAll();
+    this.combat.clear();
+    this.prologCaught = false;
+    this.bustedT = 0;
+    const c = pl.char;
+    c.maxHealth = 100;
+    c.health = 100;
+    c.armor = 0;
+    c.burnT = 0;
+    c.standUp();
+    c.arsenal?.clear();
+    this.money = 250;
+    const start = this.city.pois.get('start')!;
+    c.showAt(start.x, start.y, Math.PI);
+    this.ensureGisela();
+    this.camera.snap(start.x, start.y, 42);
+  }
+
+  saveGame(): void {
+    const c = this.player.char;
+    const zones: number[] = [];
+    for (const z of [Zone.Hafen, Zone.Nord]) if (!this.physics.isZoneLocked(z)) zones.push(z);
+    const d: SaveData = {
+      v: SAVE_VERSION,
+      done: [...this.done],
+      money: Math.round(this.money),
+      arsenal: c.arsenal?.toJSON() ?? {},
+      health: Math.round(c.health),
+      armor: Math.round(c.armor),
+      respect: { ...this.respect.values },
+      clock: this.clock,
+      zones,
+      stats: { takedowns: this.wanted.takedowns, playTime: Math.round(this.playTime) },
+      savedAt: Date.now(),
+    };
+    writeSave(d);
+  }
+
+  /** start a fresh story (prologue) */
+  newGame(): void {
+    this.done.clear();
+    this.startMission(STORY[0]);
+  }
+
+  /** continue from the save game */
+  continueGame(): boolean {
+    const d = loadSave();
+    if (!d) return false;
+    this.done = new Set(d.done);
+    this.money = d.money;
+    const c = this.player.char;
+    c.arsenal?.load(d.arsenal);
+    c.health = Math.max(30, d.health);
+    c.armor = d.armor;
+    for (const k of Object.keys(this.respect.values) as GangId[]) this.respect.values[k] = d.respect[k] ?? 0;
+    this.setClock(d.clock);
+    for (const z of d.zones) this.physics.unlockZone(z);
+    this.wanted.takedowns = d.stats.takedowns ?? 0;
+    this.playTime = d.stats.playTime ?? 0;
+    const safe = this.safehousePoint();
+    if (safe) {
+      c.showAt(safe.x, safe.y - 2.5, -Math.PI / 2);
+      const g = this.ensureGisela();
+      g.body.setTransform({ x: safe.x - 4, y: safe.y - 7 }, 0);
+      g.savePrev();
+      this.camera.snap(safe.x, safe.y, 42);
+    }
+    const next = this.nextMission();
+    if (next && !next.start) setTimeout(() => this.startMission(next), 800);
+    return true;
+  }
+
+  /** debug: finish the current dialogue */
+  skipDialogue(): void {
+    this.dialogue.finish();
   }
 
   // ------------------------------------------------------------------------------------

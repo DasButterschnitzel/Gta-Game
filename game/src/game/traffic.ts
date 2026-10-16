@@ -84,7 +84,7 @@ export class TrafficSystem {
       const hit = city.nearestLane(x, y, 30, undefined, Math.PI, true);
       if (!hit) continue;
       const e = city.lanes[hit.edge];
-      if (e.len < 12) continue;
+      if (e.len < 12 || this.w.laneBlocked(hit.edge)) continue;
       const s = clamp(hit.s, 3, e.len - 6);
       city.lanePoint(e, s, tmp);
       if (this.w.isVisible(tmp.x, tmp.y, 6)) continue;
@@ -172,6 +172,13 @@ export class TrafficSystem {
     }
   }
 
+  /** a lane that is closed, or a junction connector whose only way out is closed */
+  private blockedAhead(id: number): boolean {
+    if (this.w.laneBlocked(id)) return true;
+    const e = this.w.city.lanes[id];
+    return e.road < 0 && e.next.length > 0 && e.next.every((n) => this.w.laneBlocked(n));
+  }
+
   /** The driver of v panics: floors it and ignores lights for a while. */
   panic(v: Vehicle): void {
     const d = this.drivers.find((o) => o.v === v);
@@ -191,8 +198,10 @@ export class TrafficSystem {
     while (d.path.length < 4) {
       const e = lanes[last];
       if (!e.next.length) break;
-      // prefer not to U-turn; mild preference for straight
-      const opts = e.next;
+      // prefer not to U-turn; mild preference for straight; never into a closed bridge
+      let opts = e.next.filter((id) => !this.blockedAhead(id));
+      if (!opts.length) opts = e.next.filter((id) => lanes[id].turn === Turn.UTurn);
+      if (!opts.length) break;
       let pick = opts[0];
       if (opts.length > 1) {
         const weights = opts.map((id) => {
@@ -222,7 +231,7 @@ export class TrafficSystem {
   private relocate(d: Driver): boolean {
     const v = d.v;
     const hit = this.w.city.nearestLane(v.x, v.y, 14, v.angle, Math.PI * 0.45, false);
-    if (!hit) return false;
+    if (!hit || this.w.laneBlocked(hit.edge)) return false;
     d.edge = hit.edge;
     d.s = hit.s;
     d.path.length = 0;
@@ -299,6 +308,12 @@ export class TrafficSystem {
         target = Math.min(target, ne.speed + distAhead * 0.32);
       }
       distAhead += ne.len;
+    }
+    // dead end (closed bridge ahead): stop before the end of the lane
+    if (!d.path.length) {
+      const toEnd = e.len - d.s;
+      target = Math.min(target, toEnd < 8 ? 0 : Math.sqrt(2 * 4 * Math.max(0, toEnd - 8)));
+      if (toEnd < 10 && speed < 0.5) d.stuck += dt * 4;
     }
     // traffic lights & yielding at the end of the current lane edge (or the next one)
     const stopCheck = (edge: LaneEdge, distToEnd: number): void => {

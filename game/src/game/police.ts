@@ -186,7 +186,7 @@ export class PoliceSystem {
       const hit = city.nearestLane(px + Math.cos(ang) * r, py + Math.sin(ang) * r, 30, undefined, Math.PI, true);
       if (!hit) continue;
       const e = city.lanes[hit.edge];
-      if (e.len < 10) continue;
+      if (e.len < 10 || g.laneBlocked(hit.edge)) continue;
       const s = clamp(hit.s, 2, e.len - 4);
       city.lanePoint(e, s, tmp);
       if (g.isVisible(tmp.x, tmp.y, 8)) continue;
@@ -724,7 +724,7 @@ export class PoliceSystem {
     u.routeT -= dt;
     if (u.routeT <= 0 || u.path.length === 0) {
       u.routeT = 2.5;
-      const r = findRoute(city, u.edge, tx, ty, 26, 2500);
+      const r = findRoute(city, u.edge, tx, ty, 26, 2500, (id) => g.laneBlocked(id));
       if (!r || !r.length) {
         this.chase(u, tx, ty, Math.hypot(tx - v.x, ty - v.y));
         return;

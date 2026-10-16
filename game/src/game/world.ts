@@ -23,6 +23,8 @@ export interface WorldAPI {
   signalState(junction: number, group: number): number;
   /** pedestrian panic event (gunshot, crash, explosion) */
   alarm(x: number, y: number, radius: number, severity: number): void;
+  /** lane runs into a closed bridge (locked zone) */
+  laneBlocked(id: number): boolean;
 }
 
 /** German signal cycle shared with the shader (32 s). */
